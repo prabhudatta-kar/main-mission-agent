@@ -1,6 +1,10 @@
+import logging
+
 from integrations.sheets import sheets
 from integrations.whatsapp import whatsapp
 from agents.coach_agent import handle_runner_message, handle_coach_message
+
+logger = logging.getLogger(__name__)
 
 
 async def handle_incoming(data: dict):
@@ -8,10 +12,17 @@ async def handle_incoming(data: dict):
     text = data.get("text", {})
     message = text.get("body", "") if isinstance(text, dict) else data.get("message", "")
 
-    sender = identify_sender(phone)
+    if not phone or not message:
+        logger.debug("Skipping webhook event — no phone or message body")
+        return
+
+    normalized_phone = _normalize_phone(phone)
+    sender = identify_sender(normalized_phone)
+
+    logger.info(f"Incoming message from {normalized_phone} (type={sender['type']}): {message[:60]}")
 
     if sender["type"] == "unknown":
-        await handle_unknown_sender(phone, message)
+        await handle_unknown_sender(normalized_phone, message)
     elif sender["type"] == "runner":
         await handle_runner_message(sender, message)
     elif sender["type"] == "coach":
@@ -19,17 +30,15 @@ async def handle_incoming(data: dict):
 
 
 def identify_sender(phone: str) -> dict:
-    normalized = _normalize_phone(phone)
-
-    runner = sheets.find_runner_by_phone(normalized)
+    runner = sheets.find_runner_by_phone(phone)
     if runner:
         return {"type": "runner", "id": runner["runner_id"], "coach_id": runner["coach_id"], "data": runner}
 
-    coach = sheets.find_coach_by_phone(normalized)
+    coach = sheets.find_coach_by_phone(phone)
     if coach:
         return {"type": "coach", "id": coach["coach_id"], "data": coach}
 
-    return {"type": "unknown", "phone": normalized}
+    return {"type": "unknown", "phone": phone}
 
 
 async def handle_unknown_sender(phone: str, message: str):

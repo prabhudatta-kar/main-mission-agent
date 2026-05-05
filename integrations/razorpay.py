@@ -40,8 +40,8 @@ async def razorpay_webhook(data: dict):
 
 def verify_signature(payload_body: bytes, signature: str) -> bool:
     expected = hmac.new(
-        RAZORPAY_WEBHOOK_SECRET.encode(),
+        RAZORPAY_WEBHOOK_SECRET.encode() if RAZORPAY_WEBHOOK_SECRET else b"",
         payload_body,
-        hashlib.sha256
+        hashlib.sha256,
     ).hexdigest()
     return hmac.compare_digest(expected, signature)

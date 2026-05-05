@@ -1,20 +1,34 @@
+import logging
 import uuid
 from datetime import date, datetime
+
 import gspread
 import pytz
 from google.oauth2.service_account import Credentials
+
 from config.settings import GOOGLE_SHEETS_CREDENTIALS_JSON, GOOGLE_SHEETS_WORKBOOK_ID
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+logger = logging.getLogger(__name__)
 
 
 class SheetsClient:
     def __init__(self):
-        creds = Credentials.from_service_account_file(GOOGLE_SHEETS_CREDENTIALS_JSON, scopes=SCOPES)
+        self._client = None
+        self._workbook = None
+
+    def _connect(self):
+        if self._workbook is not None:
+            return
+        creds = Credentials.from_service_account_file(
+            GOOGLE_SHEETS_CREDENTIALS_JSON, scopes=SCOPES
+        )
         self._client = gspread.authorize(creds)
         self._workbook = self._client.open_by_key(GOOGLE_SHEETS_WORKBOOK_ID)
+        logger.info("Connected to Google Sheets workbook")
 
     def _tab(self, name: str):
+        self._connect()
         return self._workbook.worksheet(name)
 
     def _rows(self, tab_name: str) -> list:
@@ -26,13 +40,19 @@ class SheetsClient:
         return next((r for r in self._rows("Runners") if r["runner_id"] == runner_id), None)
 
     def find_runner_by_phone(self, phone: str) -> dict:
-        return next((r for r in self._rows("Runners") if r["phone"] == phone and r["status"] == "Active"), None)
+        return next(
+            (r for r in self._rows("Runners") if r["phone"] == phone and r["status"] == "Active"),
+            None,
+        )
 
     def get_all_active_runners(self) -> list:
         return [r for r in self._rows("Runners") if r["status"] == "Active"]
 
     def get_coach_runners(self, coach_id: str) -> list:
-        return [r for r in self._rows("Runners") if r["coach_id"] == coach_id and r["status"] == "Active"]
+        return [
+            r for r in self._rows("Runners")
+            if r["coach_id"] == coach_id and r["status"] == "Active"
+        ]
 
     def create_runner(self, data: dict) -> str:
         runner_id = f"RUN_{str(uuid.uuid4())[:6].upper()}"
@@ -40,15 +60,19 @@ class SheetsClient:
             runner_id, data.get("name"), data.get("phone"), data.get("coach_id"),
             "", "", data.get("weekly_days", ""), "", "", data.get("start_date", ""),
             data.get("status", "Active"), "v1", data.get("payment_status", "Paid"),
-            data.get("monthly_fee", ""), "FALSE", ""
+            data.get("monthly_fee", ""), "FALSE", "",
         ])
+        logger.info(f"Created runner {runner_id} — {data.get('name')}")
         return runner_id
 
     # --- Training Plans ---
 
     def get_todays_plan(self, runner_id: str) -> dict:
         today = date.today().isoformat()
-        return next((r for r in self._rows("Training_Plans") if r["runner_id"] == runner_id and r["date"] == today), None)
+        return next(
+            (r for r in self._rows("Training_Plans") if r["runner_id"] == runner_id and r["date"] == today),
+            None,
+        )
 
     def mark_plan_sent(self, plan_id: str):
         ws = self._tab("Training_Plans")
@@ -80,24 +104,32 @@ class SheetsClient:
     def get_todays_summary(self, coach_id: str) -> dict:
         today = date.today().isoformat()
         runner_ids = {r["runner_id"] for r in self.get_coach_runners(coach_id)}
-        todays = [r for r in self._rows("Training_Plans") if r["date"] == today and r["runner_id"] in runner_ids]
+        todays = [
+            r for r in self._rows("Training_Plans")
+            if r["date"] == today and r["runner_id"] in runner_ids
+        ]
         return {
             "total": len(todays),
             "completed": sum(1 for r in todays if r.get("completed") == "TRUE"),
-            "flagged": [r for r in todays if r.get("flags")]
+            "flagged": [r for r in todays if r.get("flags")],
         }
 
     # --- Coach Configs ---
 
     def get_coach_config(self, coach_id: str) -> dict:
-        config = next((r for r in self._rows("Coach_Configs") if r["coach_id"] == coach_id), None)
+        config = next(
+            (r for r in self._rows("Coach_Configs") if r["coach_id"] == coach_id), None
+        )
         if config:
             version = config.get("active_prompt_version", "v1")
             config["active_system_prompt"] = config.get(f"system_prompt_{version}", "")
         return config
 
     def find_coach_by_phone(self, phone: str) -> dict:
-        return next((r for r in self._rows("Coach_Configs") if r["coach_phone"] == phone and r["status"] == "Active"), None)
+        return next(
+            (r for r in self._rows("Coach_Configs") if r["coach_phone"] == phone and r["status"] == "Active"),
+            None,
+        )
 
     def get_all_active_coaches(self) -> list:
         return [r for r in self._rows("Coach_Configs") if r["status"] == "Active"]
@@ -105,7 +137,10 @@ class SheetsClient:
     # --- Rules & Corrections ---
 
     def get_active_rules(self, coach_id: str) -> list:
-        return [r for r in self._rows("Rules_And_Corrections") if r["coach_id"] == coach_id and r["status"] == "Active"]
+        return [
+            r for r in self._rows("Rules_And_Corrections")
+            if r["coach_id"] == coach_id and r["status"] == "Active"
+        ]
 
     def add_rule(self, coach_id: str, rule: str, source: str, raw_message: str = ""):
         rule_id = f"RULE_{str(uuid.uuid4())[:6].upper()}"
@@ -129,7 +164,9 @@ class SheetsClient:
     # --- Platform Log ---
 
     def log_platform_event(self, event_type: str, runner_id: str, coach_id: str, details: str, status: str = "success"):
-        self._tab("Platform_Log").append_row([_now_ist(), event_type, runner_id, coach_id, details, status])
+        self._tab("Platform_Log").append_row(
+            [_now_ist(), event_type, runner_id, coach_id, details, status]
+        )
 
 
 def _now_ist() -> str:
