@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+openai
+gspread
+google-auth
+apscheduler
+razorpay
+python-dotenv
+httpx
+pytz
