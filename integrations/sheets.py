@@ -56,14 +56,39 @@ class SheetsClient:
 
     def create_runner(self, data: dict) -> str:
         runner_id = f"RUN_{str(uuid.uuid4())[:6].upper()}"
+        onboarded = "TRUE" if data.get("onboarded") else "FALSE"
         self._tab("Runners").append_row([
-            runner_id, data.get("name"), data.get("phone"), data.get("coach_id"),
-            "", "", data.get("weekly_days", ""), "", "", data.get("start_date", ""),
-            data.get("status", "Active"), "v1", data.get("payment_status", "Paid"),
-            data.get("monthly_fee", ""), "FALSE", "",
+            runner_id,
+            data.get("name", ""),
+            data.get("phone", ""),
+            data.get("coach_id", ""),
+            data.get("race_goal", ""),
+            data.get("race_date", ""),
+            data.get("weekly_days", ""),
+            data.get("injuries", ""),
+            data.get("fitness_level", ""),
+            data.get("start_date", ""),
+            data.get("status", "Active"),
+            "v1",
+            data.get("payment_status", "Paid"),
+            data.get("monthly_fee", ""),
+            onboarded,
+            data.get("notes", ""),
         ])
         logger.info(f"Created runner {runner_id} — {data.get('name')}")
         return runner_id
+
+    def update_runner(self, runner_id: str, fields: dict):
+        ws = self._tab("Runners")
+        rows = ws.get_all_records()
+        for i, row in enumerate(rows, start=2):
+            if row["runner_id"] == runner_id:
+                headers = list(row.keys())
+                for field, value in fields.items():
+                    if field in headers:
+                        ws.update_cell(i, headers.index(field) + 1, str(value))
+                logger.info(f"Updated runner {runner_id}: {list(fields.keys())}")
+                break
 
     # --- Training Plans ---
 

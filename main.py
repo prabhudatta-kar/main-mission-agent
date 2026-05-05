@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from agents.master_agent import handle_incoming
 from config.settings import WEBHOOK_SECRET_TOKEN
 from integrations.razorpay import razorpay_webhook, verify_signature
+from routers.test_ui import router as test_router
 from scheduler.jobs import start_scheduler
 
 logging.basicConfig(
@@ -24,6 +25,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+app.include_router(test_router)
 
 
 @app.post("/webhook")
