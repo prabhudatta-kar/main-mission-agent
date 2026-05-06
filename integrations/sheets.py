@@ -22,12 +22,20 @@ class SheetsClient:
     def _connect(self):
         if self._workbook is not None:
             return
-        creds_value = GOOGLE_SHEETS_CREDENTIALS_JSON
+        creds_value = GOOGLE_SHEETS_CREDENTIALS_JSON or ""
+        logger.info(f"Sheets creds: length={len(creds_value)}, first_50={repr(creds_value[:50])}")
         if os.path.isfile(creds_value):
             creds = Credentials.from_service_account_file(creds_value, scopes=SCOPES)
         else:
-            # env var contains the JSON content directly (Railway deployment)
-            creds = Credentials.from_service_account_info(json.loads(creds_value), scopes=SCOPES)
+            try:
+                creds_dict = json.loads(creds_value)
+            except json.JSONDecodeError as e:
+                raise RuntimeError(
+                    f"GOOGLE_SHEETS_CREDENTIALS_JSON is not valid JSON (len={len(creds_value)}, "
+                    f"starts={repr(creds_value[:80])}). "
+                    "In Railway → Variables, paste the full contents of your service account JSON file."
+                ) from e
+            creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
         self._client = gspread.authorize(creds)
         self._workbook = self._client.open_by_key(GOOGLE_SHEETS_WORKBOOK_ID)
         logger.info("Connected to Google Sheets workbook")
