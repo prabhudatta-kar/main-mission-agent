@@ -1,4 +1,6 @@
+import json
 import logging
+import os
 import uuid
 from datetime import date, datetime
 
@@ -20,9 +22,12 @@ class SheetsClient:
     def _connect(self):
         if self._workbook is not None:
             return
-        creds = Credentials.from_service_account_file(
-            GOOGLE_SHEETS_CREDENTIALS_JSON, scopes=SCOPES
-        )
+        creds_value = GOOGLE_SHEETS_CREDENTIALS_JSON
+        if os.path.isfile(creds_value):
+            creds = Credentials.from_service_account_file(creds_value, scopes=SCOPES)
+        else:
+            # env var contains the JSON content directly (Railway deployment)
+            creds = Credentials.from_service_account_info(json.loads(creds_value), scopes=SCOPES)
         self._client = gspread.authorize(creds)
         self._workbook = self._client.open_by_key(GOOGLE_SHEETS_WORKBOOK_ID)
         logger.info("Connected to Google Sheets workbook")
@@ -40,8 +45,18 @@ class SheetsClient:
         return next((r for r in self._rows("Runners") if r["runner_id"] == runner_id), None)
 
     def find_runner_by_phone(self, phone: str) -> dict:
+        needle = _normalize_phone(phone)
         return next(
-            (r for r in self._rows("Runners") if r["phone"] == phone and r["status"] == "Active"),
+            (r for r in self._rows("Runners")
+             if _normalize_phone(r["phone"]) == needle and r["status"] == "Active"),
+            None,
+        )
+
+    def find_any_runner_by_phone(self, phone: str) -> dict:
+        """Find runner by phone regardless of status — used to detect already-onboarded runners."""
+        needle = _normalize_phone(phone)
+        return next(
+            (r for r in self._rows("Runners") if _normalize_phone(r["phone"]) == needle),
             None,
         )
 
@@ -196,6 +211,17 @@ class SheetsClient:
 
 def _now_ist() -> str:
     return datetime.now(pytz.timezone("Asia/Kolkata")).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _normalize_phone(phone: str) -> str:
+    phone = str(phone).strip().replace(" ", "").replace("-", "").lstrip("0")
+    if phone.startswith("+"):
+        return phone
+    if len(phone) == 10:          # bare 10-digit Indian mobile
+        return "+91" + phone
+    if len(phone) == 12 and phone.startswith("91"):
+        return "+" + phone        # 919xxxxxxxxx → +919xxxxxxxxx
+    return "+" + phone
 
 
 sheets = SheetsClient()

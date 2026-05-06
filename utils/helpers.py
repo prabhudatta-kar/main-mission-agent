@@ -3,10 +3,14 @@ import pytz
 
 
 def normalize_phone(phone: str) -> str:
-    phone = str(phone).strip().replace(" ", "").replace("-", "")
-    if not phone.startswith("+"):
-        phone = "+" + phone
-    return phone
+    phone = str(phone).strip().replace(" ", "").replace("-", "").lstrip("0")
+    if phone.startswith("+"):
+        return phone
+    if len(phone) == 10:
+        return "+91" + phone
+    if len(phone) == 12 and phone.startswith("91"):
+        return "+" + phone
+    return "+" + phone
 
 
 def today_ist() -> str:

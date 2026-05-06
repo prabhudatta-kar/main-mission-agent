@@ -26,7 +26,7 @@ Coach notes: {plan.get('coach_notes') or 'None'}"""
 
     history_text = ""
     if history:
-        history_text = "\nRECENT CONVERSATION:\n"
+        history_text = "\nCONVERSATION HISTORY (most recent last):\n"
         for msg in history:
             role = "Runner" if msg["direction"] == "inbound" else "Agent"
             history_text += f"{role}: {msg['message']}\n"
@@ -38,7 +38,12 @@ COACH RULES (always follow — these override your defaults):
 
 {runner_context}
 {plan_context}
-{history_text}"""
+{history_text}
+CONTEXT INSTRUCTIONS:
+- Read the conversation history carefully before responding. Never ask for information already given.
+- If the runner mentions their race, injury, or any profile detail, treat it as the latest ground truth even if it differs from the profile above.
+- If the runner references something from a previous message ("like I said", "as I mentioned"), find it in the history and respond accordingly.
+- Maintain continuity — your response should feel like an ongoing conversation, not a fresh start."""
 
     return [
         {"role": "system", "content": full_system},

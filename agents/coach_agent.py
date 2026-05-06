@@ -2,40 +2,48 @@ from integrations.sheets import sheets
 from integrations.whatsapp import whatsapp
 from integrations.llm import llm
 from agents.prompts import build_runner_prompt
+from agents.template_selector import select_template_response
 from utils.intent_classifier import classify_intent
 from utils.escalation import should_escalate, notify_coach
 
 
-async def handle_runner_message(sender: dict, message: str):
+async def generate_runner_response(sender: dict, message: str) -> dict:
+    """
+    Runs the full runner pipeline and returns {response, intent}.
+    Uses template selection — picks an approved template and fills variables.
+    Does NOT send to WhatsApp — caller decides what to do with the response.
+    """
     runner_id = sender["id"]
     coach_id = sender["coach_id"]
 
-    runner_data = sheets.get_runner(runner_id)
+    runner_data = sheets.get_runner(runner_id) or sender.get("data", {})
     todays_plan = sheets.get_todays_plan(runner_id)
-    recent_messages = sheets.get_last_n_messages(runner_id, n=5)
-    coach_config = sheets.get_coach_config(coach_id)
-    system_prompt = coach_config["active_system_prompt"]
-    active_rules = sheets.get_active_rules(coach_id)
+    recent_messages = sheets.get_last_n_messages(runner_id, n=15)
 
-    full_prompt = build_runner_prompt(
-        system_prompt=system_prompt,
-        rules=active_rules,
+    intent = classify_intent(message)
+    response = await select_template_response(
         runner=runner_data,
         plan=todays_plan,
         history=recent_messages,
-        incoming=message
+        message=message,
+        intent=intent,
     )
-
-    intent = classify_intent(message)
-
-    if should_escalate(intent, message, runner_data):
-        await notify_coach(coach_id, runner_data, message, reason=intent)
-
-    response = await llm.complete(full_prompt)
-    await whatsapp.send_text(runner_data["phone"], response)
 
     sheets.log_conversation(runner_id, coach_id, message, response, intent)
     sheets.update_plan_feedback(runner_id, message)
+
+    return {"response": response, "intent": intent}
+
+
+async def handle_runner_message(sender: dict, message: str):
+    """Full runner pipeline including WhatsApp send and escalation check."""
+    result = await generate_runner_response(sender, message)
+    runner_data = sender["data"]
+
+    if should_escalate(result["intent"], message, runner_data):
+        await notify_coach(sender["coach_id"], runner_data, message, reason=result["intent"])
+
+    await whatsapp.send_text(runner_data["phone"], result["response"])
 
 
 async def handle_coach_message(sender: dict, message: str):
@@ -75,7 +83,6 @@ async def _handle_coach_query(coach_id: str, message: str):
 
 
 async def _handle_runner_instruction(coach_id: str, message: str):
-    # Forward as a note — future: parse runner name and route specifically
     coach = sheets.get_coach_config(coach_id)
     await whatsapp.send_text(coach["coach_phone"], f"Noted. I'll apply this: {message}")
     sheets.add_rule(coach_id, message, source="coach_instruction", raw_message=message)

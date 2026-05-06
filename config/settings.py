@@ -5,6 +5,7 @@ load_dotenv()
 
 WATI_API_URL = os.getenv("WATI_API_URL")
 WATI_API_TOKEN = os.getenv("WATI_API_TOKEN")
+WATI_API_KEY = os.getenv("WATI_API_KEY")    # separate key for template management
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")

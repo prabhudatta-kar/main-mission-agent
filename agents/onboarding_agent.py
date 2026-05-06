@@ -7,65 +7,88 @@ from integrations.llm import llm
 
 logger = logging.getLogger(__name__)
 
-QUESTIONS = [
-    "What race are you training for, and when is it?",
-    "How many days a week can you train?",
-    "Any injuries or niggles I should know about?",
-    "Are you more of a morning or evening runner?",
-    "What's your current weekly mileage roughly?",
-]
+_SYSTEM_PROMPT = """You are an AI running coach assistant for Main Mission, a running coaching marketplace in Bangalore, India.
 
-# In-memory store: {phone: {step, answers, coach_id, name, runner_id}}
-# runner_id is set when updating an existing unboarded runner, None when creating fresh
-_sessions: dict[str, dict] = {}
+You are onboarding a new runner. Your job is to warmly collect these 5 things through natural conversation:
+1. Their target race and when it is
+2. How many days a week they can train
+3. Any injuries or physical niggles
+4. Whether they prefer morning or evening training
+5. Their current weekly mileage (roughly)
 
+Rules:
+- Be warm and conversational, like a knowledgeable running friend. Not a form-filling bot.
+- Ask one thing at a time. Don't list all the questions upfront.
+- If they name a race, infer the date from your knowledge (Ladakh Marathon→September, Mumbai Marathon→January, Bangalore Marathon→October, Delhi Half Marathon→November, Airtel Hyderabad→August). Tell them what date you assumed and confirm.
+- If an answer is vague, ask a brief follow-up before moving on.
+- Never repeat a question you already have the answer to.
+- Once you have confident answers to all 5 items, write a warm summary of what you've noted, then put [COMPLETE] on the very last line by itself. This is critical — never skip it.
+- Example: "...I've got everything I need. Can't wait to help you get to that finish line! [COMPLETE]"
 
-def start_onboarding(phone: str, coach_id: str, name: str = "New Runner", runner_id: str = None):
-    _sessions[phone] = {
-        "step": 0,
-        "answers": [],
-        "coach_id": coach_id,
-        "name": name,
-        "runner_id": runner_id,
-    }
-    logger.info(f"Onboarding started for {phone} (coach={coach_id})")
+Today's date: {today} (year {year})
+{prefilled_note}"""
+
+# {phone: {history, coach_id, name, runner_id, prefilled}}
+_sessions: dict = {}
 
 
 def is_onboarding(phone: str) -> bool:
     return phone in _sessions
 
 
+def start_onboarding(phone: str, coach_id: str, name: str = "New Runner",
+                     runner_id: str = None, prefilled: dict = None):
+    prefilled = prefilled or {}
+    prefilled_note = ""
+    if prefilled:
+        known = ", ".join(f"{k}={v}" for k, v in prefilled.items() if v)
+        prefilled_note = f"Already known from their signup: {known}. Don't ask for these again."
+
+    _sessions[phone] = {
+        "history": [],
+        "coach_id": coach_id,
+        "name": name,
+        "runner_id": runner_id,
+        "prefilled": prefilled,
+        "system": _SYSTEM_PROMPT.format(
+            today=date.today().isoformat(),
+            year=date.today().year,
+            prefilled_note=prefilled_note,
+        ),
+    }
+    logger.info(f"Onboarding started for {phone} (coach={coach_id})")
+
+
 async def handle_onboarding(phone: str, message: str) -> str:
     session = _sessions[phone]
-    step = session["step"]
+    session["history"].append({"role": "user", "content": message})
 
-    if step > 0:
-        session["answers"].append(message)
+    messages = [{"role": "system", "content": session["system"]}] + session["history"]
+    raw_response = await llm.complete(messages)
+    clean_response = raw_response.replace("[COMPLETE]", "").strip()
+    session["history"].append({"role": "assistant", "content": clean_response})
 
-    if step < len(QUESTIONS):
-        question = QUESTIONS[step]
-        session["step"] += 1
-        if step == 0:
-            return (
-                f"Welcome to Main Mission! I'm your AI coaching assistant. "
-                f"I'll ask you 5 quick questions to set up your profile.\n\n{question}"
-            )
-        return question
+    # Trigger completion if LLM signalled it OR if we can extract all 5 fields
+    user_turns = sum(1 for m in session["history"] if m["role"] == "user")
+    lm_complete = "[COMPLETE]" in raw_response
+    profile_complete = lm_complete or (user_turns >= 5 and await _is_profile_complete(session))
 
-    return await _complete_onboarding(phone, session)
+    if profile_complete:
+        try:
+            await _complete_onboarding(phone, session)
+        except Exception as e:
+            logger.error(f"Failed to save onboarding for {phone}: {e}")
+
+    return clean_response
 
 
-async def _complete_onboarding(phone: str, session: dict) -> str:
-    answers = session["answers"]
-    coach_id = session["coach_id"]
-    name = session["name"]
-
-    parsed = await _extract_profile(answers)
+async def _complete_onboarding(phone: str, session: dict) -> None:
+    parsed = await _extract_profile(session["history"], session["prefilled"])
 
     runner_data = {
-        "name": name,
+        "name": session["name"],
         "phone": phone,
-        "coach_id": coach_id,
+        "coach_id": session["coach_id"],
         "race_goal": parsed.get("race_goal", ""),
         "race_date": parsed.get("race_date", ""),
         "weekly_days": parsed.get("weekly_days", ""),
@@ -88,59 +111,55 @@ async def _complete_onboarding(phone: str, session: dict) -> str:
             "onboarded": "TRUE",
         })
         runner_id = existing_runner_id
-        logger.info(f"Updated existing runner {runner_id} after onboarding")
     else:
         runner_id = sheets.create_runner(runner_data)
-        logger.info(f"Created new runner {runner_id} after onboarding")
 
-    sheets.log_platform_event("onboarding", runner_id, coach_id, f"Onboarding completed for {name}")
+    sheets.log_platform_event("onboarding", runner_id, session["coach_id"],
+                              f"Onboarding completed for {session['name']}")
     del _sessions[phone]
+    logger.info(f"Onboarding completed and saved for {phone} → runner {runner_id}")
 
-    coach = sheets.get_coach_config(coach_id)
-    coach_name = coach.get("coach_name", "your coach") if coach else "your coach"
 
-    return (
-        f"You're all set, {name.split()[0]}! Here's what I've got:\n\n"
-        f"Race: {parsed.get('race_goal', '—')}\n"
-        f"Race date: {parsed.get('race_date') or '—'}\n"
-        f"Training days: {parsed.get('weekly_days', '—')}/week\n"
-        f"Injuries: {parsed.get('injuries', 'None')}\n"
-        f"Fitness: {parsed.get('fitness_level', '—')}\n\n"
-        f"{coach_name} will set up your training plan and you'll start receiving daily sessions soon. 🏃"
+async def _is_profile_complete(session: dict) -> bool:
+    """Return True if all 5 onboarding fields can be extracted from the conversation."""
+    parsed = await _extract_profile(session["history"], session["prefilled"])
+    return bool(
+        parsed.get("race_goal") and
+        parsed.get("weekly_days") and
+        parsed.get("injuries") is not None and
+        parsed.get("fitness_level")
     )
 
 
-async def _extract_profile(answers: list) -> dict:
-    prompt = f"""Extract structured data from these onboarding answers. Return JSON only, no markdown.
+async def _extract_profile(history: list, prefilled: dict) -> dict:
+    today = date.today()
+    history_text = "\n".join(
+        f"{'Runner' if m['role'] == 'user' else 'Agent'}: {m['content']}"
+        for m in history
+    )
 
-Q1 (race goal and date): {answers[0]}
-Q2 (training days per week): {answers[1]}
-Q3 (injuries): {answers[2]}
-Q4 (morning/evening preference): {answers[3]}
-Q5 (current weekly mileage): {answers[4]}
+    prompt = f"""Extract the runner's profile from this onboarding conversation. Today is {today.isoformat()} (year {today.year}).
 
-Return exactly this JSON:
+{history_text}
+
+Also consider these already-known values: {json.dumps(prefilled)}
+
+Return this exact JSON, no markdown:
 {{
-  "race_goal": "e.g. Half Marathon",
-  "race_date": "YYYY-MM-DD or empty string if unclear",
+  "race_goal": "short race name",
+  "race_date": "YYYY-MM-DD — use the date mentioned or inferred in conversation; if only month known use the 15th; empty string if unknown",
   "weekly_days": 4,
-  "injuries": "e.g. Left knee ITB or None",
-  "fitness_level": "Beginner or Intermediate or Advanced based on mileage"
+  "injuries": "description or None",
+  "fitness_level": "Beginner (under 20km/wk) or Intermediate (20-50km/wk) or Advanced (50km+/wk)"
 }}"""
 
     try:
         raw = await llm.complete([
-            {"role": "system", "content": "Extract structured data and return only valid JSON."},
+            {"role": "system", "content": "Extract structured runner data from a conversation. Return only valid JSON."},
             {"role": "user", "content": prompt},
         ])
         raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         return json.loads(raw)
     except Exception as e:
-        logger.warning(f"Profile extraction failed: {e}. Falling back to raw answers.")
-        return {
-            "race_goal": answers[0],
-            "race_date": "",
-            "weekly_days": "",
-            "injuries": answers[2],
-            "fitness_level": "Intermediate",
-        }
+        logger.warning(f"Profile extraction failed: {e}")
+        return {"race_goal": "", "race_date": "", "weekly_days": "", "injuries": "None", "fitness_level": "Intermediate"}

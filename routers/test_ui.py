@@ -2,12 +2,7 @@ from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from agents.master_agent import identify_sender
-from agents.onboarding_agent import is_onboarding, start_onboarding, handle_onboarding
-from agents.prompts import build_runner_prompt
-from integrations.sheets import sheets
-from integrations.llm import llm
-from utils.intent_classifier import classify_intent
+from agents.master_agent import compute_response
 from utils.helpers import normalize_phone
 
 router = APIRouter(prefix="/test")
@@ -27,6 +22,7 @@ async def test_ui():
 
 @router.get("/coaches")
 async def list_coaches():
+    from integrations.sheets import sheets
     coaches = sheets.get_all_active_coaches()
     return [{"id": c["coach_id"], "name": c["coach_name"]} for c in coaches]
 
@@ -34,56 +30,7 @@ async def list_coaches():
 @router.post("/chat")
 async def test_chat(req: ChatRequest):
     phone = normalize_phone(req.phone)
-    sender = identify_sender(phone)
-
-    if sender["type"] == "runner":
-        runner_data = sender["data"]
-        if str(runner_data.get("onboarded", "TRUE")).upper() == "FALSE":
-            if not is_onboarding(phone):
-                start_onboarding(phone, sender["coach_id"],
-                                 name=runner_data.get("name", ""), runner_id=sender["id"])
-            response = await handle_onboarding(phone, req.message)
-            return {"sender_type": "onboarding", "intent": None, "response": response}
-
-        runner_id = sender["id"]
-        coach_id = sender["coach_id"]
-        runner_data = sheets.get_runner(runner_id)
-        todays_plan = sheets.get_todays_plan(runner_id)
-        recent_messages = sheets.get_last_n_messages(runner_id, n=5)
-        coach_config = sheets.get_coach_config(coach_id)
-        active_rules = sheets.get_active_rules(coach_id)
-
-        prompt = build_runner_prompt(
-            system_prompt=coach_config.get("active_system_prompt", ""),
-            rules=active_rules,
-            runner=runner_data,
-            plan=todays_plan,
-            history=recent_messages,
-            incoming=req.message,
-        )
-        intent = classify_intent(req.message)
-        response = await llm.complete(prompt)
-        return {"sender_type": "runner", "intent": intent, "response": response}
-
-    elif sender["type"] == "coach":
-        return {
-            "sender_type": "coach",
-            "intent": None,
-            "response": "Coach message received. (Coach flow not simulated in test UI yet.)",
-        }
-
-    else:
-        # Unknown phone — start or continue onboarding
-        if not req.coach_id:
-            return {
-                "sender_type": "unknown",
-                "intent": None,
-                "response": "Select a coach from the panel above to start onboarding this number.",
-            }
-        if not is_onboarding(phone):
-            start_onboarding(phone, req.coach_id, name=req.name or "New Runner")
-        response = await handle_onboarding(phone, req.message)
-        return {"sender_type": "onboarding", "intent": None, "response": response}
+    return await compute_response(phone, req.message, coach_id=req.coach_id or None, name=req.name)
 
 
 _HTML = """<!DOCTYPE html>
@@ -171,7 +118,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 
 <div class="input-bar">
   <textarea id="input" rows="1" placeholder="Type a message…"></textarea>
-  <button class="send-btn" id="send-btn" onclick="send()">&#9658;</button>
+  <button class="send-btn" id="send-btn" onclick="sendMessage()">&#9658;</button>
 </div>
 
 <script>
@@ -200,13 +147,21 @@ inputEl.addEventListener('input', () => {
   inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + 'px';
 });
 inputEl.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
 });
 
-async function send() {
+async function sendMessage() {
   const phone   = phoneEl.value.trim();
   const message = inputEl.value.trim();
-  if (!phone || !message) return;
+
+  if (!phone) {
+    phoneEl.style.border = '1.5px solid #e53935';
+    phoneEl.placeholder = 'Enter a phone number first!';
+    phoneEl.focus();
+    setTimeout(() => { phoneEl.style.border = 'none'; phoneEl.placeholder = '+919876543210'; }, 2000);
+    return;
+  }
+  if (!message) { inputEl.focus(); return; }
 
   document.querySelector('.empty-hint')?.remove();
   bubble(message, 'sent', '');
@@ -227,8 +182,13 @@ async function send() {
         coach_id: coachEl.value,
       })
     });
-    const data = await res.json();
     rmBubble(typingId);
+    if (!res.ok) {
+      const text = await res.text();
+      bubble('Server error ' + res.status + ': ' + text.slice(0, 200), 'received', 'error');
+      sendBtn.disabled = false; sendBtn.innerHTML = '&#9658;'; inputEl.focus(); return;
+    }
+    const data = await res.json();
 
     const type = data.sender_type || 'unknown';
     badgeEl.className = 'badge ' + type;
@@ -248,6 +208,7 @@ async function send() {
   sendBtn.innerHTML = '&#9658;';
   inputEl.focus();
 }
+window.sendMessage = sendMessage;
 
 let n = 0;
 function bubble(text, side, meta) {

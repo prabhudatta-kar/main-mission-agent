@@ -1,9 +1,13 @@
 .env
+.env.example
 __pycache__/
 *.pyc
 *.pyo
 .DS_Store
 credentials.json
+*.json
+!package.json
+integrations/*.json
 *.egg-info/
 dist/
 build/
