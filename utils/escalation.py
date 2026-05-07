@@ -1,4 +1,4 @@
-from integrations.sheets import sheets
+from integrations.firebase_db import sheets
 from integrations.whatsapp import whatsapp
 
 ESCALATE_INTENTS = {"injury_flag", "dropout_risk"}

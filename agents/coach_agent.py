@@ -1,4 +1,4 @@
-from integrations.sheets import sheets
+from integrations.firebase_db import sheets
 from integrations.whatsapp import whatsapp
 from integrations.llm import llm
 from agents.prompts import build_runner_prompt

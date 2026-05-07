@@ -3,6 +3,7 @@ uvicorn
 openai
 gspread
 google-auth
+firebase-admin
 apscheduler
 razorpay
 python-dotenv

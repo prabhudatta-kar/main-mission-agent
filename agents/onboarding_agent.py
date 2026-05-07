@@ -2,7 +2,7 @@ import json
 import logging
 from datetime import date
 
-from integrations.sheets import sheets
+from integrations.firebase_db import sheets
 from integrations.llm import llm
 
 logger = logging.getLogger(__name__)

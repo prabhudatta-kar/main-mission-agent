@@ -1,6 +1,6 @@
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from config.settings import MORNING_MESSAGE_HOUR, EVENING_CHECKIN_HOUR, DIGEST_HOUR
-from integrations.sheets import sheets
+from integrations.firebase_db import sheets
 from integrations.whatsapp import whatsapp
 
 scheduler = AsyncIOScheduler(timezone="Asia/Kolkata")

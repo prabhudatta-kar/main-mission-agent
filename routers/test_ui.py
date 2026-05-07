@@ -22,7 +22,7 @@ async def test_ui():
 
 @router.get("/coaches")
 async def list_coaches():
-    from integrations.sheets import sheets
+    from integrations.firebase_db import sheets
     coaches = sheets.get_all_active_coaches()
     return [{"id": c["coach_id"], "name": c["coach_name"]} for c in coaches]
 

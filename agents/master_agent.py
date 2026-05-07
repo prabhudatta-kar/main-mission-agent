@@ -1,6 +1,6 @@
 import logging
 
-from integrations.sheets import sheets
+from integrations.firebase_db import sheets
 from integrations.whatsapp import whatsapp
 from agents.coach_agent import handle_runner_message, handle_coach_message, generate_runner_response
 from agents.onboarding_agent import is_onboarding, start_onboarding, handle_onboarding
