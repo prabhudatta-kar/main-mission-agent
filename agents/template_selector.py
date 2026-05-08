@@ -100,7 +100,7 @@ _CREATIVE_DESCRIPTIONS = {
 
 async def _fill_creative_vars(
     needed_vars: set, runner: dict, plan, message: str, base_vars: dict, history: list = None
-) -> dict:
+) -> dict:  # noqa: C901
     """Ask LLM for only the variables that can't come from data."""
     if not needed_vars:
         return {}
@@ -129,10 +129,25 @@ async def _fill_creative_vars(
         url_note = "\nNOTE: The runner shared a URL you cannot access. Do not invent data from it — ask them to paste the key numbers directly.\n"
 
     descriptions = {v: _CREATIVE_DESCRIPTIONS.get(v, "short relevant value") for v in needed_vars}
+
+    # Build plan summary line
+    if plan:
+        plan_summary = (
+            f"{plan.get('session_type','Run')} — {plan.get('distance_km','')}km "
+            f"at {plan.get('intensity','easy')} intensity"
+        )
+    else:
+        plan_summary = "Rest day / no session today"
+
     user_prompt = (
         get_prompt("creative_vars_user")
         .replace("{first_name}",    base_vars["first_name"])
         .replace("{race_goal}",     base_vars["race_goal"])
+        .replace("{weeks_to_race}", base_vars.get("weeks_to_race", "unknown"))
+        .replace("{fitness_level}", runner.get("fitness_level") or "unknown")
+        .replace("{weekly_days}",   str(runner.get("weekly_days") or "unknown"))
+        .replace("{injuries}",      runner.get("injuries") or "none reported")
+        .replace("{plan_summary}",  plan_summary)
         .replace("{history_block}", history_block)
         .replace("{message}",       message)
         .replace("{url_note}",      url_note)
