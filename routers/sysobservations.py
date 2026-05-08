@@ -96,6 +96,7 @@ async def sysobservations_page():
   <h1>🔍 System Observations</h1>
   <div style="display:flex;align-items:center;gap:16px">
     <a href="/dashboard">← Dashboard</a>
+    <a href="/logout" style="color:#888">Sign out</a>
     <button class="run-btn" id="run-btn" onclick="runNow()">Run Now</button>
   </div>
 </div>

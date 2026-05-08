@@ -22,6 +22,12 @@ RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET")
 
 WEBHOOK_SECRET_TOKEN = os.getenv("WEBHOOK_SECRET_TOKEN", "")
 
+# Auth
+SESSION_SECRET     = os.getenv("SESSION_SECRET", "change-me-please-use-random-32-chars")
+ADMIN_EMAIL        = os.getenv("ADMIN_EMAIL", "")
+ADMIN_PASSWORD     = os.getenv("ADMIN_PASSWORD", "")
+COACH_ACCESS_CODE  = os.getenv("COACH_ACCESS_CODE", "")   # shared code for all coaches
+
 APP_ENV = os.getenv("APP_ENV", "development")
 TIMEZONE = os.getenv("TIMEZONE", "Asia/Kolkata")
 MORNING_MESSAGE_HOUR = int(os.getenv("MORNING_MESSAGE_HOUR", 6))
