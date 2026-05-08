@@ -3,11 +3,17 @@
 Shows the last 14 days of AI-generated improvement analysis with
 one-click fix application and undo.
 """
+from datetime import datetime
+
+import pytz
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse, JSONResponse
 
+from agents.prompt_store import reload_prompt
 from agents.system_watcher import get_recent_observations, run_system_watcher
 from integrations.firebase_db import sheets
+
+_IST = pytz.timezone("Asia/Kolkata")
 
 router = APIRouter()
 
@@ -18,7 +24,6 @@ router = APIRouter()
 async def apply_fix(obs_id: str, fix_idx: int):
     """Apply a suggested fix — saves old value as undo snapshot."""
     doc_ref = sheets._col("system_observations").document(obs_id)
-    obs     = sheets._stream(doc_ref.get() if False else None) or None
     doc     = doc_ref.get()
     if not doc.exists:
         return JSONResponse({"ok": False, "error": "Observation not found"}, status_code=404)
@@ -46,7 +51,6 @@ async def apply_fix(obs_id: str, fix_idx: int):
             "version": current.get("version") if current else None,
             "content": current.get("content", "") if current else "",
         }
-        from agents.prompt_store import reload_prompt
         sheets.upsert_system_prompt(target_id, content,
                                     changed_by="observer_fix",
                                     reason=fix.get("description", ""))
@@ -55,7 +59,6 @@ async def apply_fix(obs_id: str, fix_idx: int):
     elif fix_type == "rule_add":
         # Apply to all active coaches (system-level rule) or a specific one
         coaches = sheets.get_all_active_coaches()
-        rule_ids = []
         for c in coaches:
             sheets.add_rule(c["coach_id"], content,
                             source="observer_fix", raw_message=fix.get("description", ""))
@@ -64,10 +67,8 @@ async def apply_fix(obs_id: str, fix_idx: int):
     else:
         return JSONResponse({"ok": False, "error": f"Unknown fix_type: {fix_type}"}, status_code=400)
 
-    from datetime import datetime
-    import pytz
     fixes[fix_idx]["applied"]       = True
-    fixes[fix_idx]["applied_at"]    = datetime.now(pytz.timezone("Asia/Kolkata")).strftime("%Y-%m-%d %H:%M:%S")
+    fixes[fix_idx]["applied_at"]    = datetime.now(_IST).strftime("%Y-%m-%d %H:%M:%S")
     fixes[fix_idx]["undo_snapshot"] = undo_snapshot
     doc_ref.update({"fixes": fixes})
 
@@ -100,7 +101,6 @@ async def undo_fix(obs_id: str, fix_idx: int):
     if snap_type == "prompt_update":
         old_content = snap.get("content", "")
         target_id   = snap.get("target", "")
-        from agents.prompt_store import reload_prompt
         sheets.upsert_system_prompt(target_id, old_content,
                                     changed_by="undo",
                                     reason=f"Undid fix: {fix.get('description','')}")
