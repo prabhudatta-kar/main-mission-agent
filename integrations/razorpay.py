@@ -35,6 +35,8 @@ async def _handle_payment_captured(data: dict):
     try:
         payment = data["payload"]["payment"]["entity"]
         notes   = payment.get("notes", {})
+        if isinstance(notes, list):   # Razorpay sends [] when no notes set
+            notes = {}
         await _create_and_onboard(
             name=notes.get("name"),
             phone=notes.get("phone"),
@@ -53,13 +55,17 @@ async def _handle_subscription_activated(data: dict):
         subscription = payload.get("subscription", {}).get("entity", {})
         payment      = payload.get("payment",      {}).get("entity", {})
 
-        notes         = subscription.get("notes", {})
+        notes           = subscription.get("notes", {})
+        if isinstance(notes, list):   # Razorpay sends [] when no notes set
+            notes = {}
         subscription_id = subscription.get("id", "")
-        monthly_fee   = payment.get("amount", 0) / 100
+        monthly_fee     = payment.get("amount", 0) / 100
 
         # Notes may also be on the payment object if not set on subscription
         if not notes.get("name"):
             notes = payment.get("notes", {})
+            if isinstance(notes, list):
+                notes = {}
 
         await _create_and_onboard(
             name=notes.get("name"),
