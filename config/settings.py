@@ -26,4 +26,6 @@ APP_ENV = os.getenv("APP_ENV", "development")
 TIMEZONE = os.getenv("TIMEZONE", "Asia/Kolkata")
 MORNING_MESSAGE_HOUR = int(os.getenv("MORNING_MESSAGE_HOUR", 6))
 EVENING_CHECKIN_HOUR = int(os.getenv("EVENING_CHECKIN_HOUR", 19))
-DIGEST_HOUR = int(os.getenv("DIGEST_HOUR", 21))
+DIGEST_HOUR          = int(os.getenv("DIGEST_HOUR", 21))
+SYSTEM_WATCHER_HOUR  = int(os.getenv("SYSTEM_WATCHER_HOUR", 23))   # 11 PM — after all conversations settle
+COACH_WATCHER_HOUR   = int(os.getenv("COACH_WATCHER_HOUR", 22))    # 10 PM — coach reads it before bed
