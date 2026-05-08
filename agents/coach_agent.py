@@ -8,14 +8,10 @@ from utils.escalation import should_escalate, notify_coach
 
 
 def _no_plan_response(runner_data: dict) -> str:
-    first = (runner_data.get("name") or "there").split()[0]
-    if first == "New":
+    first = (runner_data.get("name") or "").split()[0]
+    if not first or first == "New":
         first = "there"
-    return (
-        f"Hey {first}! Your coach has been notified and is putting together your personalised "
-        f"training plan — you'll hear from them within 24 hours. "
-        f"Sit tight and we'll get you started very soon 🏃"
-    )
+    return f"Hey {first} — your coach is putting together your plan. Should have it ready within 24 hours."
 
 
 async def generate_runner_response(sender: dict, message: str) -> dict:

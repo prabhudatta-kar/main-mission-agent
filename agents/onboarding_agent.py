@@ -171,14 +171,13 @@ async def _send_payment_link(phone: str, runner_id: str, session: dict):
 
         if short_url:
             msg = (
-                f"Amazing, {first}! Your plan is all set 🎉\n\n"
-                f"One last step — set up your monthly coaching subscription here:\n{short_url}\n\n"
-                f"Once done, your training starts! See you on the roads 🏃"
+                f"Got everything I need, {first}. "
+                f"Last step — set up your subscription here:\n{short_url}"
             )
         else:
             msg = (
-                f"Amazing, {first}! Your plan is all set 🎉\n\n"
-                f"Your coach will be in touch shortly to get you started. See you on the roads 🏃"
+                f"Got everything I need, {first}. "
+                f"Your coach will be in touch within 24 hours to get things started."
             )
 
         await whatsapp.send_text(phone, msg)

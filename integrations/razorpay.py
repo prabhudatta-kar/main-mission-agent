@@ -162,11 +162,9 @@ async def _send_payment_confirmation(runner: dict):
         first = "there"   # avoid "New Runner" placeholder leaking
 
     msg = (
-        f"Payment confirmed, {first}! 🎉 Welcome to Main Mission.\n\n"
-        f"Your coach has been notified and will reach out within 24 hours "
-        f"to build your personalised training plan.\n\n"
-        f"In the meantime, feel free to ask me anything about your training. "
-        f"See you on the roads! 🏃"
+        f"Payment done, {first} — you're in. "
+        f"Coach will have your plan ready within 24 hours. "
+        f"Message here anytime if you have questions."
     )
 
     # Prefer free-form text if within 24h session window, otherwise log a warning
