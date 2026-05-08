@@ -29,24 +29,37 @@ app = FastAPI(lifespan=lifespan)
 app.include_router(dashboard_router)
 app.include_router(test_router)
 
-# Stores the last raw Wati webhook payload for debugging
+# Stores the last raw Wati webhook payload for debugging (set before auth so we can diagnose 401s)
 _last_webhook: dict = {}
+_last_webhook_meta: dict = {}   # token, headers, status for diagnosing auth failures
 
 
 @app.post("/webhook")
 async def webhook(request: Request, token: str = Query(default="")):
-    if WEBHOOK_SECRET_TOKEN and token != WEBHOOK_SECRET_TOKEN:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    # Capture body and meta BEFORE auth check so /webhook/last always shows what Wati sent
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
 
-    data = await request.json()
-
-    # Store for debugging — visit /webhook/last to verify Wati is reaching the server
-    global _last_webhook
+    global _last_webhook, _last_webhook_meta
     _last_webhook = data
+    _last_webhook_meta = {
+        "token_received": token or "(none)",
+        "token_expected": WEBHOOK_SECRET_TOKEN or "(not set)",
+        "auth_ok": not WEBHOOK_SECRET_TOKEN or token == WEBHOOK_SECRET_TOKEN,
+        "content_type": request.headers.get("content-type", ""),
+        "user_agent": request.headers.get("user-agent", ""),
+    }
+
+    if WEBHOOK_SECRET_TOKEN and token != WEBHOOK_SECRET_TOKEN:
+        logger.warning(f"Webhook 401: received token='{token}', expected='{WEBHOOK_SECRET_TOKEN}'")
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
     msg_type = data.get("type", "")
     if msg_type not in ("text", "message", ""):
-        return {"status": "ignored"}
+        logger.info(f"Webhook ignored msg_type='{msg_type}'")
+        return {"status": "ignored", "type": msg_type}
 
     await handle_incoming(data)
     return {"status": "ok"}
@@ -55,7 +68,9 @@ async def webhook(request: Request, token: str = Query(default="")):
 @app.get("/webhook/last")
 async def webhook_last():
     """Shows the last payload received from Wati — use to verify webhook is configured."""
-    return _last_webhook or {"info": "No webhook received yet. Configure Wati → Settings → Webhooks."}
+    if not _last_webhook:
+        return {"info": "No webhook received yet. Configure Wati → Settings → Webhooks."}
+    return {"meta": _last_webhook_meta, "payload": _last_webhook}
 
 
 @app.post("/razorpay/webhook")
