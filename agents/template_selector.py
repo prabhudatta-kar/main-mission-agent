@@ -97,26 +97,42 @@ _CREATIVE_DESCRIPTIONS = {
 }
 
 async def _fill_creative_vars(
-    needed_vars: set, runner: dict, plan, message: str, base_vars: dict
+    needed_vars: set, runner: dict, plan, message: str, base_vars: dict, history: list = None
 ) -> dict:
     """Ask LLM for only the variables that can't come from data."""
     if not needed_vars:
         return {}
 
+    history_block = ""
+    if history:
+        lines = []
+        for m in history[-12:]:
+            direction = m.get("direction", "")
+            text = (m.get("message") or "").strip()
+            if not text:
+                continue
+            if direction == "inbound":
+                lines.append(f"Runner: {text}")
+            elif direction == "outbound":
+                lines.append(f"Coach AI: {text}")
+        if lines:
+            history_block = "\n\nRecent conversation:\n" + "\n".join(lines)
+
     descriptions = {v: _CREATIVE_DESCRIPTIONS.get(v, "short relevant value") for v in needed_vars}
     prompt = f"""You are filling blanks in a WhatsApp message template for a running coach.
 
-Runner: {base_vars['first_name']}, training for {base_vars['race_goal']}
-Their message: "{message}"
+Runner: {base_vars['first_name']}, training for {base_vars['race_goal']}{history_block}
 
-Fill these variables — keep each value SHORT and specific (no greetings, no extra text):
+Their latest message: "{message}"
+
+Fill these variables — keep each SHORT and specific, referencing the conversation context above where relevant (no greetings, no extra text):
 {json.dumps(descriptions, indent=2)}
 
 Return ONLY valid JSON with exactly these keys."""
 
     try:
         raw = await llm.complete([
-            {"role": "system", "content": "Fill template variables. Return only valid JSON, no markdown."},
+            {"role": "system", "content": "Fill template variables using conversation context. Return only valid JSON, no markdown."},
             {"role": "user", "content": prompt},
         ])
         raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
@@ -148,7 +164,7 @@ async def select_template_response(
     already_filled = required & set(base.keys())
     needs_llm = required - already_filled
 
-    creative = await _fill_creative_vars(needs_llm, runner, plan, message, base)
+    creative = await _fill_creative_vars(needs_llm, runner, plan, message, base, history=history)
     all_vars = {**base, **creative}
 
     try:
