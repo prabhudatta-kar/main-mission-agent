@@ -10,9 +10,16 @@ logger = logging.getLogger(__name__)
 
 async def handle_incoming(data: dict):
     """Real webhook entry point — routes and sends reply via WhatsApp."""
+    # Skip messages sent BY the operator/bot (owner=True) to avoid infinite loops
+    if data.get("owner", False):
+        logger.debug("Skipping operator-sent message (owner=True)")
+        return
+
     phone = data.get("waId") or data.get("phone")
-    text = data.get("text", {})
-    message = text.get("body", "") if isinstance(text, dict) else data.get("message", "")
+
+    # Wati sends text as a plain string (not {"body": ...})
+    text_field = data.get("text", "")
+    message = text_field if isinstance(text_field, str) else text_field.get("body", "")
 
     if not phone or not message:
         logger.debug("Skipping webhook event — no phone or message body")
