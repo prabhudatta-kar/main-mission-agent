@@ -16,16 +16,17 @@ class WhatsAppClient:
         }
 
     async def send_text(self, phone: str, message: str):
+        clean_phone = phone.lstrip("+")
         async with httpx.AsyncClient() as client:
             try:
                 resp = await client.post(
-                    f"{self._base}/api/v1/sendSessionMessage/{phone}",
+                    f"{self._base}/api/v1/sendSessionMessage/{clean_phone}",
                     headers=self._headers,
                     json={"messageText": message},
                     timeout=10,
                 )
                 resp.raise_for_status()
-                logger.info(f"Sent text to {phone}")
+                logger.info(f"Sent text to {clean_phone}")
             except httpx.HTTPStatusError as e:
                 logger.error(f"WhatsApp send_text failed for {phone}: HTTP {e.response.status_code} — {e.response.text}")
             except httpx.RequestError as e:
