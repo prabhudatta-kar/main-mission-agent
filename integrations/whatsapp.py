@@ -22,13 +22,16 @@ class WhatsAppClient:
         }
 
     async def send_text(self, phone: str, message: str):
+        if not message or not message.strip():
+            logger.error(f"send_text called with empty message for {phone} — skipping")
+            return
         clean_phone = _wati_phone(phone)
         async with httpx.AsyncClient() as client:
             try:
                 resp = await client.post(
                     f"{self._base}/api/v1/sendSessionMessage/{clean_phone}",
                     headers=self._headers,
-                    json={"messageText": message},
+                    params={"messageText": message},
                     timeout=10,
                 )
                 resp.raise_for_status()

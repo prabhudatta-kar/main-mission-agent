@@ -66,6 +66,8 @@ async def handle_onboarding(phone: str, message: str) -> str:
     messages = [{"role": "system", "content": session["system"]}] + session["history"]
     raw_response = await llm.complete(messages)
     clean_response = raw_response.replace("[COMPLETE]", "").strip()
+    if not clean_response:
+        clean_response = f"Great, I think I have everything I need, {session['name'].split()[0]}! Let me get your plan set up 🏃"
     session["history"].append({"role": "assistant", "content": clean_response})
 
     # Trigger completion if LLM signalled it OR if we can extract all 5 fields
