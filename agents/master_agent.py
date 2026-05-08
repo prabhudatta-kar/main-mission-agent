@@ -1,5 +1,6 @@
 import logging
 
+from config.settings import PAYMENT_LINK
 from integrations.firebase_db import sheets
 from integrations.whatsapp import whatsapp
 from agents.coach_agent import handle_runner_message, handle_coach_message, generate_runner_response
@@ -41,10 +42,15 @@ async def handle_incoming(data: dict):
         await handle_coach_message(sender, message)
 
     else:
-        await whatsapp.send_text(
-            normalized,
-            "Hi! I don't have this number on file. Please contact Main Mission to get set up.",
-        )
+        if PAYMENT_LINK:
+            msg = (
+                f"Hi! 👋 Looks like you're not signed up with Main Mission yet.\n\n"
+                f"To join and get your personalised running plan, complete your payment here:\n{PAYMENT_LINK}\n\n"
+                f"Once done, come back and say Hi — we'll get you started right away! 🏃"
+            )
+        else:
+            msg = "Hi! 👋 Looks like you're not signed up with Main Mission yet. Please contact us to get set up."
+        await whatsapp.send_text(normalized, msg)
 
 
 async def compute_response(phone: str, message: str, coach_id: str = None, name: str = None) -> dict:

@@ -20,7 +20,9 @@ RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID")
 RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET")
 RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET")
 
-WEBHOOK_SECRET_TOKEN = os.getenv("WEBHOOK_SECRET_TOKEN", "")
+WEBHOOK_SECRET_TOKEN    = os.getenv("WEBHOOK_SECRET_TOKEN", "")
+WHATSAPP_BUSINESS_PHONE = os.getenv("WHATSAPP_BUSINESS_PHONE", "919019585359")  # for wa.me links
+PAYMENT_LINK            = os.getenv("PAYMENT_LINK", "")  # Razorpay subscription link shown to unknown numbers
 
 APP_ENV = os.getenv("APP_ENV", "development")
 TIMEZONE = os.getenv("TIMEZONE", "Asia/Kolkata")

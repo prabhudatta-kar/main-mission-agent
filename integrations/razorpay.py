@@ -124,17 +124,8 @@ async def _create_and_onboard(name, phone, coach_id, monthly_fee, subscription_i
         "notes":           f"subscription_id={subscription_id}" if subscription_id else "",
     })
 
-    coach = sheets.get_coach_config(coach_id)
-    coach_name = coach.get("coach_name", "your coach") if coach else "your coach"
-
-    await whatsapp.send_template(
-        phone=phone,
-        template_name="onboarding_welcome",
-        variables={"runner_name": name.split()[0], "coach_name": coach_name},
-    )
-
     sheets.log_platform_event("payment", runner_id, coach_id,
-                              f"₹{monthly_fee} received — runner created, onboarding started")
+                              f"₹{monthly_fee} received — runner created, awaiting inbound Hi")
     logger.info(f"Runner {runner_id} created and onboarding initiated for {phone}")
 
 
