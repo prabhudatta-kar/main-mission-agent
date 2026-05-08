@@ -719,8 +719,6 @@ td small{display:block;font-size:11px;color:#999;margin-top:2px}
     <span id="hdr-date">—</span>
     <button class="manage-ai-btn" onclick="openManageAI()">⚙ Manage AI</button>
     <button class="refresh-btn" onclick="loadData()">↻ Refresh</button>
-    <a href="/sysobservations" style="color:#aaa;font-size:12px;text-decoration:none">🔍 Observations</a>
-    <a href="/logout" style="color:#888;font-size:12px;text-decoration:none">Sign out</a>
   </div>
 </header>
 

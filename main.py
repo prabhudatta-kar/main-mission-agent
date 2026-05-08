@@ -8,7 +8,6 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from agents.master_agent import handle_incoming
 from config.settings import WEBHOOK_SECRET_TOKEN
 from integrations.razorpay import razorpay_webhook, verify_signature
-from routers.auth import AuthMiddleware, router as auth_router
 from routers.dashboard import router as dashboard_router
 from routers.sysobservations import router as sysobs_router
 from routers.test_ui import router as test_router
@@ -29,8 +28,6 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
-app.add_middleware(AuthMiddleware)
-app.include_router(auth_router)
 app.include_router(dashboard_router)
 app.include_router(sysobs_router)
 app.include_router(test_router)
