@@ -3,8 +3,14 @@ import logging
 import httpx
 
 from config.settings import WATI_API_URL, WATI_API_TOKEN
+from utils.helpers import normalize_phone
 
 logger = logging.getLogger(__name__)
+
+
+def _wati_phone(phone: str) -> str:
+    """Normalize any phone format to the 12-digit form Wati requires (no + prefix)."""
+    return normalize_phone(phone).lstrip("+")
 
 
 class WhatsAppClient:
@@ -16,7 +22,7 @@ class WhatsAppClient:
         }
 
     async def send_text(self, phone: str, message: str):
-        clean_phone = phone.lstrip("+")
+        clean_phone = _wati_phone(phone)
         async with httpx.AsyncClient() as client:
             try:
                 resp = await client.post(
@@ -33,8 +39,7 @@ class WhatsAppClient:
                 logger.error(f"WhatsApp send_text request error for {phone}: {e}")
 
     async def send_template(self, phone: str, template_name: str, variables: dict):
-        # Phone goes as query param; strip + for Wati compatibility
-        clean_phone = phone.lstrip("+")
+        clean_phone = _wati_phone(phone)
         parameters  = [{"name": k, "value": str(v)} for k, v in variables.items()]
         async with httpx.AsyncClient() as client:
             try:
