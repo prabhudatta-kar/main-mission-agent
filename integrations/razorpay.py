@@ -66,6 +66,9 @@ async def _handle_subscription_activated(data: dict):
         runner_id       = notes.get("runner_id", "")
         subscription_id = subscription.get("id", "")
 
+        runner    = None
+        phone_for_msg = notes.get("whatsapp_number") or notes.get("phone", "")
+
         if runner_id:
             sheets.update_runner(runner_id, {
                 "payment_status": "Paid",
@@ -74,23 +77,27 @@ async def _handle_subscription_activated(data: dict):
             })
             sheets.log_platform_event("payment", runner_id, notes.get("coach_id", ""),
                                       f"Subscription activated: {subscription_id}")
+            runner = sheets.get_runner(runner_id)
             logger.info(f"Runner {runner_id} marked Active after subscription.activated")
         else:
-            # Fallback: runner_id not in notes — try finding by phone
-            phone = notes.get("whatsapp_number") or notes.get("phone", "")
-            if phone:
-                existing = sheets.find_any_runner_by_phone(phone)
+            # Fallback: find by phone stored in notes
+            if phone_for_msg:
+                existing = sheets.find_any_runner_by_phone(phone_for_msg)
                 if existing:
                     sheets.update_runner(existing["runner_id"], {
                         "payment_status": "Paid",
                         "status":         "Active",
                         "notes":          f"subscription_id={subscription_id}",
                     })
+                    runner = existing
                     logger.info(f"Runner {existing['runner_id']} marked Active by phone lookup")
                 else:
-                    logger.error(f"subscription.activated: no runner found for phone {phone}")
+                    logger.error(f"subscription.activated: no runner found for phone {phone_for_msg}")
             else:
                 logger.error(f"subscription.activated: no runner_id or phone in notes: {notes}")
+
+        if runner:
+            await _send_payment_confirmation(runner)
 
     except Exception as e:
         logger.error(f"Error handling subscription.activated: {e}")
@@ -145,6 +152,33 @@ async def _create_and_onboard(name, phone, coach_id, monthly_fee, subscription_i
     sheets.log_platform_event("payment", runner_id, coach_id,
                               f"₹{monthly_fee} received — runner created, awaiting inbound Hi")
     logger.info(f"Runner {runner_id} created and onboarding initiated for {phone}")
+
+
+async def _send_payment_confirmation(runner: dict):
+    """Send a WhatsApp confirmation after subscription is activated."""
+    phone = runner.get("phone", "")
+    first = (runner.get("name") or "there").split()[0]
+    if first == "New":
+        first = "there"   # avoid "New Runner" placeholder leaking
+
+    msg = (
+        f"Payment confirmed, {first}! 🎉 Welcome to Main Mission.\n\n"
+        f"Your coach has been notified and will reach out within 24 hours "
+        f"to build your personalised training plan.\n\n"
+        f"In the meantime, feel free to ask me anything about your training. "
+        f"See you on the roads! 🏃"
+    )
+
+    # Prefer free-form text if within 24h session window, otherwise log a warning
+    # (payment usually happens minutes after onboarding, so session should be open)
+    if sheets.is_within_session_window(runner.get("runner_id", "")):
+        await whatsapp.send_text(phone, msg)
+    else:
+        # Session expired — send anyway and let Wati decide
+        await whatsapp.send_text(phone, msg)
+        logger.warning(f"Payment confirmation sent outside session window for {phone} — may need template")
+
+    logger.info(f"Payment confirmation sent to {phone}")
 
 
 async def create_subscription(name: str, phone: str, coach_id: str, runner_id: str) -> str:

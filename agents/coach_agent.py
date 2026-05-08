@@ -7,6 +7,17 @@ from utils.intent_classifier import classify_intent
 from utils.escalation import should_escalate, notify_coach
 
 
+def _no_plan_response(runner_data: dict) -> str:
+    first = (runner_data.get("name") or "there").split()[0]
+    if first == "New":
+        first = "there"
+    return (
+        f"Hey {first}! Your coach has been notified and is putting together your personalised "
+        f"training plan — you'll hear from them within 24 hours. "
+        f"Sit tight and we'll get you started very soon 🏃"
+    )
+
+
 async def generate_runner_response(sender: dict, message: str) -> dict:
     """
     Runs the full runner pipeline and returns {response, intent}.
@@ -14,10 +25,19 @@ async def generate_runner_response(sender: dict, message: str) -> dict:
     Does NOT send to WhatsApp — caller decides what to do with the response.
     """
     runner_id = sender["id"]
-    coach_id = sender["coach_id"]
+    coach_id  = sender["coach_id"]
 
     runner_data = sheets.get_runner(runner_id) or sender.get("data", {})
-    todays_plan = sheets.get_todays_plan(runner_id)
+
+    # Guard: don't respond as a coaching AI until a plan exists.
+    # Runners who just paid haven't had a plan created by the coach yet.
+    all_plans = sheets.get_runner_plans(runner_id)
+    if not all_plans:
+        response = _no_plan_response(runner_data)
+        sheets.log_conversation(runner_id, coach_id, message, response, "awaiting_plan")
+        return {"response": response, "intent": "awaiting_plan"}
+
+    todays_plan     = sheets.get_todays_plan(runner_id)
     recent_messages = sheets.get_last_n_messages(runner_id, n=15)
 
     intent = classify_intent(message)

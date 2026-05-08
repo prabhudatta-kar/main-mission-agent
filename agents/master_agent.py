@@ -35,6 +35,11 @@ async def handle_incoming(data: dict):
         if str(runner_data.get("onboarded", "TRUE")).upper() == "FALSE":
             response = await _run_onboarding(normalized, sender, message)
             await whatsapp.send_text(runner_data["phone"], response)
+        elif runner_data.get("payment_status", "Paid") == "Unpaid":
+            # Onboarded but hasn't paid yet — remind them to complete payment
+            await whatsapp.send_text(runner_data["phone"],
+                "To activate your coaching, please complete the payment using the link we sent you earlier. "
+                "Reply HELP if you need it resent 🙏")
         else:
             await handle_runner_message(sender, message)
 
