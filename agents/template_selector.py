@@ -10,6 +10,7 @@ import logging
 import re
 
 from integrations.llm import llm
+from integrations.strava import STRAVA_ACTIVITY_RE, fetch_strava_context
 from templates.catalog import TEMPLATES, fill_template
 from utils.helpers import weeks_until
 
@@ -106,7 +107,7 @@ async def _fill_creative_vars(
     history_block = ""
     if history:
         lines = []
-        for m in history[-12:]:
+        for m in history[-14:]:
             direction = m.get("direction", "")
             text = (m.get("message") or "").strip()
             if not text:
@@ -116,23 +117,37 @@ async def _fill_creative_vars(
             elif direction == "outbound":
                 lines.append(f"Coach AI: {text}")
         if lines:
-            history_block = "\n\nRecent conversation:\n" + "\n".join(lines)
+            history_block = "\n\nConversation so far (oldest→newest):\n" + "\n".join(lines)
+
+    # Fetch context for Strava links; warn about other URLs we can't access
+    url_note = ""
+    strava_match = STRAVA_ACTIVITY_RE.search(message)
+    if strava_match:
+        url_note = "\n" + await fetch_strava_context(strava_match.group(0)) + "\n"
+    elif re.search(r"https?://", message):
+        url_note = "\nNOTE: The runner shared a URL you cannot access. Do not invent data from it — ask them to paste the key numbers directly.\n"
 
     descriptions = {v: _CREATIVE_DESCRIPTIONS.get(v, "short relevant value") for v in needed_vars}
-    prompt = f"""You are filling blanks in a WhatsApp message template for a running coach.
+    prompt = f"""You are filling template variables for an AI running coach replying on WhatsApp.
 
 Runner: {base_vars['first_name']}, training for {base_vars['race_goal']}{history_block}
 
-Their latest message: "{message}"
+Latest message from runner: "{message}"{url_note}
 
-Fill these variables — keep each SHORT and specific, referencing the conversation context above where relevant (no greetings, no extra text):
+RULES (critical):
+- Reference SPECIFIC facts from the conversation above — e.g. if the runner said "glutes", say "glutes", not a generic body part.
+- NEVER invent numbers (pace, distance, heart rate) that the runner did not explicitly state.
+- If you genuinely don't have enough information to answer precisely, say so honestly and ask for the detail.
+- Keep each variable SHORT (1-2 sentences max). No greetings.
+
+Fill these variables:
 {json.dumps(descriptions, indent=2)}
 
 Return ONLY valid JSON with exactly these keys."""
 
     try:
         raw = await llm.complete([
-            {"role": "system", "content": "Fill template variables using conversation context. Return only valid JSON, no markdown."},
+            {"role": "system", "content": "You are a precise running coach assistant. Fill template variables using only facts from the conversation. Never fabricate data. Return only valid JSON, no markdown."},
             {"role": "user", "content": prompt},
         ])
         raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
