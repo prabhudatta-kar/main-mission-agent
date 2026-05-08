@@ -18,6 +18,14 @@ TEMPLATES: dict[str, dict] = {
 
     # ── Proactive (business-initiated) ─────────────────────────────────────
 
+    "onboarding_welcome": {
+        "scenario": "New runner just paid — send first WhatsApp message to start onboarding",
+        "body":      "Welcome to Main Mission, {runner_name}! 🏃 I'm your AI coaching assistant. Your coach {coach_name} has set up your programme. Reply HI to get started — I'll ask you a few quick questions to personalise your plan.",
+        "variables": ["runner_name", "coach_name"],
+        "wati_name": "onboarding_welcome",
+        "wati_body": "Welcome to Main Mission, {{1}}! 🏃 I'm your AI coaching assistant. Your coach {{2}} has set up your programme. Reply HI to get started — I'll ask you a few quick questions to personalise your plan.",
+    },
+
     "morning_run": {
         "scenario": "Runner has a run session today — send morning workout nudge",
         "body": "Morning {first_name}! Today's session: {session_type} — {distance}km at {intensity} pace. {weeks_to_race} weeks to {race_goal}. Reply GO for full details 🏃",
