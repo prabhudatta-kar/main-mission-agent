@@ -157,6 +157,15 @@ async def undo_fix(obs_id: str, fix_idx: int):
     return {"ok": True, "message": "Fix undone"}
 
 
+@router.delete("/sysobservations/{obs_id}")
+async def delete_observation(obs_id: str):
+    try:
+        sheets._col("system_observations").document(obs_id).delete()
+        return {"ok": True}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
 # ── Dashboard page ────────────────────────────────────────────────────────────
 
 @router.get("/sysobservations", response_class=HTMLResponse)
@@ -241,10 +250,11 @@ async def sysobservations_page():
         )
 
         cards += f"""
-        <div class="card">
+        <div class="card" id="card-{obs_id}">
           <div class="card-header">
             <span class="date">{date_str}</span>
             <span class="count">{count} conversations</span>
+            <button class="del-btn" onclick="deleteObs('{obs_id}')" title="Delete this observation">🗑</button>
           </div>
           <p class="summary">{summary}</p>
           {f'<div class="priority">🎯 {priority}</div>' if priority else ''}
@@ -288,6 +298,8 @@ h3{{font-size:12px;font-weight:700;color:#666;text-transform:uppercase;letter-sp
 blockquote{{border-left:2px solid #444;padding-left:10px;font-size:12px;color:#888;font-style:italic;margin:6px 0}}
 .win{{font-size:13px;color:#c8e6c9;padding:6px 0;border-bottom:1px solid #1e2a1e}}
 .win:last-child{{border-bottom:none}}
+.del-btn{{margin-left:auto;background:none;border:none;color:#444;font-size:15px;cursor:pointer;padding:2px 6px;border-radius:4px;transition:color .15s}}
+.del-btn:hover{{color:#ef5350}}
 /* Fix cards */
 .fix-card{{background:#0e1420;border:1px solid #2a3a5a;border-radius:8px;padding:14px;margin-bottom:10px}}
 .fix-card.fix-applied{{border-color:#2a5c2a;background:#0e180e}}
@@ -377,6 +389,20 @@ async function undoFix(obsId, fixIdx, btn) {{
       btn.disabled = false; btn.textContent = '↩ Undo';
     }}
   }} catch(e) {{ toast('Error: ' + e.message, true); btn.disabled = false; btn.textContent = '↩ Undo'; }}
+}}
+
+async function deleteObs(obsId) {{
+  if (!confirm('Delete this observation? This cannot be undone.')) return;
+  try {{
+    const res = await fetch(`/sysobservations/${{obsId}}`, {{method:'DELETE'}});
+    const d   = await res.json();
+    if (d.ok) {{
+      document.getElementById(`card-${{obsId}}`).remove();
+      toast('Observation deleted');
+    }} else {{
+      toast('Error: ' + (d.error || 'Failed'), true);
+    }}
+  }} catch(e) {{ toast('Error: ' + e.message, true); }}
 }}
 
 function toast(msg, isErr) {{
