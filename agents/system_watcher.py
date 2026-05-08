@@ -119,13 +119,17 @@ async def _generate_fixes(issues: list) -> list:
     )
 
     try:
+        # Use .replace() instead of .format() — issues_json contains { } which
+        # confuse str.format() into raising KeyError on JSON object keys.
+        user_content = (
+            _FIX_PROMPT
+            .replace("{prompt_catalog}", catalog)
+            .replace("{issues_json}", json.dumps(issues, indent=2))
+            .replace("{current_prompts}", current)
+        )
         raw = await llm.complete([
             {"role": "system", "content": "You are an expert AI prompt engineer. Generate minimal, targeted fixes. Return only valid JSON array."},
-            {"role": "user",   "content": _FIX_PROMPT.format(
-                prompt_catalog=catalog,
-                issues_json=json.dumps(issues, indent=2),
-                current_prompts=current,
-            )},
+            {"role": "user",   "content": user_content},
         ], model=OBSERVATIONS_MODEL, max_tokens=4000)
         raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         fixes = json.loads(raw)

@@ -129,13 +129,14 @@ async def _fill_creative_vars(
         url_note = "\nNOTE: The runner shared a URL you cannot access. Do not invent data from it — ask them to paste the key numbers directly.\n"
 
     descriptions = {v: _CREATIVE_DESCRIPTIONS.get(v, "short relevant value") for v in needed_vars}
-    user_prompt = get_prompt("creative_vars_user").format(
-        first_name=base_vars["first_name"],
-        race_goal=base_vars["race_goal"],
-        history_block=history_block,
-        message=message,
-        url_note=url_note,
-        descriptions=json.dumps(descriptions, indent=2),
+    user_prompt = (
+        get_prompt("creative_vars_user")
+        .replace("{first_name}",    base_vars["first_name"])
+        .replace("{race_goal}",     base_vars["race_goal"])
+        .replace("{history_block}", history_block)
+        .replace("{message}",       message)
+        .replace("{url_note}",      url_note)
+        .replace("{descriptions}",  json.dumps(descriptions, indent=2))
     )
 
     try:
