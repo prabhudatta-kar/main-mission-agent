@@ -133,8 +133,14 @@ async def _generate_fixes(issues: list) -> list:
         ], model=OBSERVATIONS_MODEL, max_tokens=4000)
         raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         fixes = json.loads(raw)
-        # Attach status fields
+        if not isinstance(fixes, list):
+            fixes = [fixes]
+        # Attach current prompt as old_content so the UI can show a diff
+        current_prompts = {pid: get_prompt(pid) for pid in prompt_ids}
         for f in fixes:
+            if f.get("fix_type") == "prompt_update":
+                f["old_content"] = current_prompts.get(f.get("target_id", ""), "")
+            f.setdefault("old_content", "")
             f.setdefault("applied", False)
             f.setdefault("applied_at", None)
             f.setdefault("undo_snapshot", None)

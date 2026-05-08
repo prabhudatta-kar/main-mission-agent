@@ -3,7 +3,9 @@
 Shows the last 14 days of AI-generated improvement analysis with
 one-click fix application and undo.
 """
+import difflib
 from datetime import datetime
+from html import escape
 
 import pytz
 from fastapi import APIRouter
@@ -14,6 +16,25 @@ from agents.system_watcher import get_recent_observations, run_system_watcher
 from integrations.firebase_db import sheets
 
 _IST = pytz.timezone("Asia/Kolkata")
+
+
+def _render_diff(old: str, new: str) -> str:
+    """Return an HTML block showing a line-by-line diff of old vs new."""
+    old_lines = old.splitlines()
+    new_lines = new.splitlines()
+    diff = list(difflib.ndiff(old_lines, new_lines))
+    rows = []
+    for line in diff:
+        code = line[:2]
+        text = escape(line[2:])
+        if code == "+ ":
+            rows.append(f'<div class="dl-add"><span class="dl-gutter">+</span>{text}</div>')
+        elif code == "- ":
+            rows.append(f'<div class="dl-del"><span class="dl-gutter">−</span>{text}</div>')
+        elif code == "  ":
+            rows.append(f'<div class="dl-ctx"><span class="dl-gutter"> </span>{text}</div>')
+        # skip "? " hint lines
+    return "\n".join(rows) if rows else "<em>No diff available</em>"
 
 router = APIRouter()
 
@@ -45,11 +66,12 @@ async def apply_fix(obs_id: str, fix_idx: int):
 
     if fix_type == "prompt_update":
         current = sheets.get_system_prompt(target_id)
+        # Store version + target only — old_content already lives on the fix itself,
+        # so we don't duplicate it here (keeps the undo_snapshot small).
         undo_snapshot = {
             "type":    "prompt_update",
             "target":  target_id,
             "version": current.get("version") if current else None,
-            "content": current.get("content", "") if current else "",
         }
         sheets.upsert_system_prompt(target_id, content,
                                     changed_by="observer_fix",
@@ -57,7 +79,6 @@ async def apply_fix(obs_id: str, fix_idx: int):
         reload_prompt(target_id)
 
     elif fix_type == "rule_add":
-        # Apply to all active coaches (system-level rule) or a specific one
         coaches = sheets.get_all_active_coaches()
         for c in coaches:
             sheets.add_rule(c["coach_id"], content,
@@ -70,7 +91,13 @@ async def apply_fix(obs_id: str, fix_idx: int):
     fixes[fix_idx]["applied"]       = True
     fixes[fix_idx]["applied_at"]    = datetime.now(_IST).strftime("%Y-%m-%d %H:%M:%S")
     fixes[fix_idx]["undo_snapshot"] = undo_snapshot
-    doc_ref.update({"fixes": fixes})
+
+    try:
+        doc_ref.update({"fixes": fixes})
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Firestore update failed for obs {obs_id}: {e}")
+        return JSONResponse({"ok": False, "error": f"Database write failed: {e}"}, status_code=500)
 
     return {"ok": True, "message": f"Fix applied: {fix.get('description','')}"}
 
@@ -99,15 +126,17 @@ async def undo_fix(obs_id: str, fix_idx: int):
     snap_type = snap.get("type")
 
     if snap_type == "prompt_update":
-        old_content = snap.get("content", "")
+        # old_content lives on the fix itself (not in snapshot, to keep docs small)
         target_id   = snap.get("target", "")
+        old_content = fix.get("old_content", "")
+        if not old_content:
+            return JSONResponse({"ok": False, "error": "No old content to restore"}, status_code=400)
         sheets.upsert_system_prompt(target_id, old_content,
                                     changed_by="undo",
                                     reason=f"Undid fix: {fix.get('description','')}")
         reload_prompt(target_id)
 
     elif snap_type == "rule_add":
-        # Remove rules that exactly match the added text
         coaches = sheets.get_all_active_coaches()
         for c in coaches:
             rules = sheets.get_all_coach_rules(c["coach_id"])
@@ -115,10 +144,15 @@ async def undo_fix(obs_id: str, fix_idx: int):
                 if r.get("rule_derived") == snap.get("rule_text") and r.get("source") == "observer_fix":
                     sheets.delete_rule(r["rule_id"])
 
-    fixes[fix_idx]["applied"]       = False
-    fixes[fix_idx]["applied_at"]    = None
-    fixes[fix_idx]["undo_snapshot"] = None
-    doc_ref.update({"fixes": fixes})
+    fixes[fix_idx]["applied"]    = False
+    fixes[fix_idx]["applied_at"] = None
+
+    try:
+        doc_ref.update({"fixes": fixes})
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Firestore undo update failed for obs {obs_id}: {e}")
+        return JSONResponse({"ok": False, "error": f"Database write failed: {e}"}, status_code=500)
 
     return {"ok": True, "message": "Fix undone"}
 
@@ -159,23 +193,37 @@ async def sysobservations_page():
         for i, fix in enumerate(fixes):
             applied    = fix.get("applied", False)
             applied_at = fix.get("applied_at", "")
+            fix_type   = fix.get("fix_type", "")
             label      = fix.get("target_label", fix.get("target_id", ""))
             btn_state  = 'disabled style="background:#2a5c2a"' if applied else ""
             undo_state = "" if applied else 'disabled style="opacity:.3"'
             badge_html = f'<span class="applied-badge">Applied {applied_at}</span>' if applied else ""
 
+            # Prompt updates: show a diff; rule adds: show the new rule text
+            if fix_type == "prompt_update" and fix.get("old_content"):
+                preview_html = f"""
+                <details class="fix-preview">
+                  <summary>View diff (red = removed · green = added)</summary>
+                  <div class="diff-block">{_render_diff(fix.get("old_content",""), fix.get("new_content",""))}</div>
+                </details>"""
+            elif fix.get("new_content"):
+                preview_html = f"""
+                <details class="fix-preview">
+                  <summary>Preview content</summary>
+                  <pre class="fix-content">{escape(fix.get("new_content","")[:1200])}</pre>
+                </details>"""
+            else:
+                preview_html = ""
+
             fixes_html += f"""
             <div class="fix-card {'fix-applied' if applied else ''}">
               <div class="fix-header">
-                <span class="fix-type-badge">{fix.get('fix_type','').replace('_',' ')}</span>
+                <span class="fix-type-badge">{fix_type.replace('_',' ')}</span>
                 <span class="fix-target">→ {label}</span>
                 {badge_html}
               </div>
               <p class="fix-desc">{fix.get('description','')}</p>
-              <details class="fix-preview">
-                <summary>Preview new content</summary>
-                <pre class="fix-content">{fix.get('new_content','')[:1200]}</pre>
-              </details>
+              {preview_html}
               <div class="fix-actions">
                 <button class="apply-btn" {btn_state}
                   onclick="applyFix('{obs_id}', {i}, this)">
@@ -252,6 +300,11 @@ blockquote{{border-left:2px solid #444;padding-left:10px;font-size:12px;color:#8
 .fix-preview summary{{font-size:12px;color:#666;cursor:pointer;padding:4px 0}}
 .fix-preview summary:hover{{color:#90caf9}}
 .fix-content{{font-size:11px;color:#aaa;background:#0a0d14;border:1px solid #1e2a3a;border-radius:4px;padding:10px;overflow-x:auto;white-space:pre-wrap;word-break:break-word;max-height:300px;overflow-y:auto;margin-top:6px}}
+.diff-block{{font-family:'Fira Mono','Courier New',monospace;font-size:11px;border:1px solid #1e2a3a;border-radius:4px;overflow-y:auto;max-height:400px;margin-top:6px;line-height:1.5}}
+.dl-add{{background:#0d2112;color:#a5d6a7;padding:1px 6px;white-space:pre-wrap;word-break:break-word}}
+.dl-del{{background:#2d0f0f;color:#ef9a9a;padding:1px 6px;white-space:pre-wrap;word-break:break-word;text-decoration:line-through;opacity:.8}}
+.dl-ctx{{background:#0a0d14;color:#555;padding:1px 6px;white-space:pre-wrap;word-break:break-word}}
+.dl-gutter{{display:inline-block;width:16px;opacity:.6;user-select:none}}
 .fix-actions{{display:flex;gap:8px}}
 .apply-btn{{background:#1e3a5f;color:#90caf9;border:1px solid #2a5a8f;border-radius:6px;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;transition:background .15s}}
 .apply-btn:hover:not([disabled]){{background:#2a5a8f}}
