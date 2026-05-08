@@ -32,7 +32,7 @@ class WhatsAppClient:
                     timeout=10,
                 )
                 resp.raise_for_status()
-                logger.info(f"Sent text to {clean_phone}")
+                logger.info(f"Sent text to {clean_phone} — Wati response: {resp.text[:300]}")
             except httpx.HTTPStatusError as e:
                 logger.error(f"WhatsApp send_text failed for {phone}: HTTP {e.response.status_code} — {e.response.text}")
             except httpx.RequestError as e:

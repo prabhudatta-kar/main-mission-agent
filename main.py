@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
@@ -33,6 +34,10 @@ app.include_router(test_router)
 _last_webhook: dict = {}
 _last_webhook_meta: dict = {}   # token, headers, status for diagnosing auth failures
 
+# Deduplicate Wati retries — Wati resends if we don't reply within ~7s; cache processed IDs
+_processed_ids: set = set()
+_MAX_DEDUP_SIZE = 500   # prevent unbounded growth
+
 
 @app.post("/webhook")
 async def webhook(request: Request, token: str = Query(default="")):
@@ -61,7 +66,18 @@ async def webhook(request: Request, token: str = Query(default="")):
         logger.info(f"Webhook ignored msg_type='{msg_type}'")
         return {"status": "ignored", "type": msg_type}
 
-    await handle_incoming(data)
+    # Deduplicate: Wati retries if we take >~7s; fire-and-forget so we reply instantly
+    global _processed_ids
+    msg_id = data.get("id") or data.get("whatsappMessageId", "")
+    if msg_id and msg_id in _processed_ids:
+        logger.info(f"Duplicate webhook ignored: {msg_id}")
+        return {"status": "duplicate"}
+    if msg_id:
+        _processed_ids.add(msg_id)
+        if len(_processed_ids) > _MAX_DEDUP_SIZE:
+            _processed_ids = set(list(_processed_ids)[-_MAX_DEDUP_SIZE // 2:])
+
+    asyncio.create_task(handle_incoming(data))
     return {"status": "ok"}
 
 
