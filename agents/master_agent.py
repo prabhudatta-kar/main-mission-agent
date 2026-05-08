@@ -1,6 +1,6 @@
 import logging
 
-from config.settings import PAYMENT_LINK
+from config.settings import DEFAULT_COACH_ID
 from integrations.firebase_db import sheets
 from integrations.whatsapp import whatsapp
 from agents.coach_agent import handle_runner_message, handle_coach_message, generate_runner_response
@@ -42,15 +42,21 @@ async def handle_incoming(data: dict):
         await handle_coach_message(sender, message)
 
     else:
-        if PAYMENT_LINK:
-            msg = (
-                f"Hi! 👋 Looks like you're not signed up with Main Mission yet.\n\n"
-                f"To join and get your personalised running plan, complete your payment here:\n{PAYMENT_LINK}\n\n"
-                f"Once done, come back and say Hi — we'll get you started right away! 🏃"
-            )
-        else:
-            msg = "Hi! 👋 Looks like you're not signed up with Main Mission yet. Please contact us to get set up."
-        await whatsapp.send_text(normalized, msg)
+        # New number — create a provisional runner and start onboarding immediately.
+        # Payment link is sent at the end of onboarding via Razorpay API.
+        coach_id  = DEFAULT_COACH_ID
+        runner_id = sheets.create_runner({
+            "name":           "New Runner",
+            "phone":          normalized,
+            "coach_id":       coach_id,
+            "status":         "Pending",
+            "payment_status": "Unpaid",
+            "onboarded":      False,
+        })
+        runner_data = sheets.get_runner(runner_id)
+        sender      = {"type": "runner", "id": runner_id, "coach_id": coach_id, "data": runner_data}
+        response    = await _run_onboarding(normalized, sender, message)
+        await whatsapp.send_text(normalized, response)
 
 
 async def compute_response(phone: str, message: str, coach_id: str = None, name: str = None) -> dict:

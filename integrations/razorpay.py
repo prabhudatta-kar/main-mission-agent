@@ -3,7 +3,9 @@ import hashlib
 import logging
 from datetime import date
 
-from config.settings import RAZORPAY_WEBHOOK_SECRET
+import httpx
+
+from config.settings import RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET, RAZORPAY_PLAN_ID, RAZORPAY_WEBHOOK_SECRET
 from integrations.firebase_db import sheets
 from integrations.whatsapp import whatsapp
 
@@ -49,31 +51,47 @@ async def _handle_payment_captured(data: dict):
 
 
 async def _handle_subscription_activated(data: dict):
-    """Subscription activated (first payment made) — create runner and onboard."""
+    """
+    Subscription activated — runner already exists in Firebase (created during onboarding).
+    Just mark them as paid and active.
+    """
     try:
         payload      = data.get("payload", {})
         subscription = payload.get("subscription", {}).get("entity", {})
-        payment      = payload.get("payment",      {}).get("entity", {})
 
-        notes           = subscription.get("notes", {})
-        if isinstance(notes, list):   # Razorpay sends [] when no notes set
+        notes = subscription.get("notes", {})
+        if isinstance(notes, list):
             notes = {}
+
+        runner_id       = notes.get("runner_id", "")
         subscription_id = subscription.get("id", "")
-        monthly_fee     = payment.get("amount", 0) / 100
 
-        # Notes may also be on the payment object if not set on subscription
-        if not notes.get("name"):
-            notes = payment.get("notes", {})
-            if isinstance(notes, list):
-                notes = {}
+        if runner_id:
+            sheets.update_runner(runner_id, {
+                "payment_status": "Paid",
+                "status":         "Active",
+                "notes":          f"subscription_id={subscription_id}",
+            })
+            sheets.log_platform_event("payment", runner_id, notes.get("coach_id", ""),
+                                      f"Subscription activated: {subscription_id}")
+            logger.info(f"Runner {runner_id} marked Active after subscription.activated")
+        else:
+            # Fallback: runner_id not in notes — try finding by phone
+            phone = notes.get("whatsapp_number") or notes.get("phone", "")
+            if phone:
+                existing = sheets.find_any_runner_by_phone(phone)
+                if existing:
+                    sheets.update_runner(existing["runner_id"], {
+                        "payment_status": "Paid",
+                        "status":         "Active",
+                        "notes":          f"subscription_id={subscription_id}",
+                    })
+                    logger.info(f"Runner {existing['runner_id']} marked Active by phone lookup")
+                else:
+                    logger.error(f"subscription.activated: no runner found for phone {phone}")
+            else:
+                logger.error(f"subscription.activated: no runner_id or phone in notes: {notes}")
 
-        await _create_and_onboard(
-            name=notes.get("name"),
-            phone=notes.get("phone"),
-            coach_id=notes.get("coach_id"),
-            monthly_fee=monthly_fee,
-            subscription_id=subscription_id,
-        )
     except Exception as e:
         logger.error(f"Error handling subscription.activated: {e}")
 
@@ -127,6 +145,43 @@ async def _create_and_onboard(name, phone, coach_id, monthly_fee, subscription_i
     sheets.log_platform_event("payment", runner_id, coach_id,
                               f"₹{monthly_fee} received — runner created, awaiting inbound Hi")
     logger.info(f"Runner {runner_id} created and onboarding initiated for {phone}")
+
+
+async def create_subscription(name: str, phone: str, coach_id: str, runner_id: str) -> str:
+    """
+    Create a Razorpay subscription via API and return the short_url payment link.
+    The customer's phone and name are stored in notes so the webhook can identify them.
+    Returns empty string if RAZORPAY_PLAN_ID is not configured or the call fails.
+    """
+    if not RAZORPAY_PLAN_ID or not RAZORPAY_KEY_ID or not RAZORPAY_KEY_SECRET:
+        logger.warning("Razorpay not fully configured — skipping subscription creation")
+        return ""
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "https://api.razorpay.com/v1/subscriptions",
+                auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET),
+                json={
+                    "plan_id":       RAZORPAY_PLAN_ID,
+                    "total_count":   120,    # 10 years — effectively perpetual until cancelled
+                    "customer_notify": 0,    # we notify via WhatsApp
+                    "notes": {
+                        "name":             name,
+                        "whatsapp_number":  phone,
+                        "coach_id":         coach_id,
+                        "runner_id":        runner_id,
+                    },
+                },
+                timeout=15,
+            )
+            resp.raise_for_status()
+            short_url = resp.json().get("short_url", "")
+            logger.info(f"Created Razorpay subscription for {phone}: {short_url}")
+            return short_url
+    except Exception as e:
+        logger.error(f"Failed to create Razorpay subscription for {phone}: {e}")
+        return ""
 
 
 def verify_signature(payload_body: bytes, signature: str) -> bool:

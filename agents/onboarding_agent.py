@@ -5,6 +5,7 @@ from datetime import date
 from agents.prompt_store import get_prompt
 from integrations.firebase_db import sheets
 from integrations.llm import llm
+from integrations.whatsapp import whatsapp
 
 logger = logging.getLogger(__name__)
 
@@ -85,14 +86,18 @@ async def _complete_onboarding(phone: str, session: dict) -> None:
 
     existing_runner_id = session.get("runner_id")
     if existing_runner_id:
-        sheets.update_runner(existing_runner_id, {
-            "race_goal": runner_data["race_goal"],
-            "race_date": runner_data["race_date"],
-            "weekly_days": runner_data["weekly_days"],
-            "injuries": runner_data["injuries"],
+        update_fields = {
+            "race_goal":    runner_data["race_goal"],
+            "race_date":    runner_data["race_date"],
+            "weekly_days":  runner_data["weekly_days"],
+            "injuries":     runner_data["injuries"],
             "fitness_level": runner_data["fitness_level"],
-            "onboarded": "TRUE",
-        })
+            "onboarded":    "TRUE",
+        }
+        # If name was a placeholder (e.g. "New Runner"), update with the real name
+        if parsed.get("name") and session.get("name") in ("New Runner", "", None):
+            update_fields["name"] = parsed["name"]
+        sheets.update_runner(existing_runner_id, update_fields)
         runner_id = existing_runner_id
     else:
         runner_id = sheets.create_runner(runner_data)
@@ -101,6 +106,9 @@ async def _complete_onboarding(phone: str, session: dict) -> None:
                               f"Onboarding completed for {session['name']}")
     del _sessions[phone]
     logger.info(f"Onboarding completed and saved for {phone} → runner {runner_id}")
+
+    # Send payment link to complete enrollment
+    await _send_payment_link(phone, runner_id, session)
 
 
 async def _is_profile_complete(session: dict) -> bool:
@@ -129,6 +137,7 @@ Also consider these already-known values: {json.dumps(prefilled)}
 
 Return this exact JSON, no markdown:
 {{
+  "name": "runner's first and last name if mentioned, else empty string",
   "race_goal": "short race name",
   "race_date": "YYYY-MM-DD — use the date mentioned or inferred in conversation; if only month known use the 15th; empty string if unknown",
   "weekly_days": 4,
@@ -146,3 +155,34 @@ Return this exact JSON, no markdown:
     except Exception as e:
         logger.warning(f"Profile extraction failed: {e}")
         return {"race_goal": "", "race_date": "", "weekly_days": "", "injuries": "None", "fitness_level": "Intermediate"}
+
+
+async def _send_payment_link(phone: str, runner_id: str, session: dict):
+    """Create a Razorpay subscription and send the payment link via WhatsApp."""
+    try:
+        from integrations.razorpay import create_subscription
+        name     = session.get("name", "Runner")
+        coach_id = session.get("coach_id", "")
+        first    = name.split()[0]
+
+        short_url = await create_subscription(
+            name=name, phone=phone, coach_id=coach_id, runner_id=runner_id
+        )
+
+        if short_url:
+            msg = (
+                f"Amazing, {first}! Your plan is all set 🎉\n\n"
+                f"One last step — set up your monthly coaching subscription here:\n{short_url}\n\n"
+                f"Once done, your training starts! See you on the roads 🏃"
+            )
+        else:
+            msg = (
+                f"Amazing, {first}! Your plan is all set 🎉\n\n"
+                f"Your coach will be in touch shortly to get you started. See you on the roads 🏃"
+            )
+
+        await whatsapp.send_text(phone, msg)
+        logger.info(f"Payment link sent to {phone}: {short_url or '(no link — plan ID not configured)'}")
+
+    except Exception as e:
+        logger.error(f"Failed to send payment link to {phone}: {e}")
