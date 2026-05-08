@@ -37,8 +37,15 @@ async def generate_runner_response(sender: dict, message: str) -> dict:
         sheets.log_conversation(runner_id, coach_id, message, response, "awaiting_plan")
         return {"response": response, "intent": "awaiting_plan"}
 
-    todays_plan     = sheets.get_todays_plan(runner_id)
-    recent_messages = sheets.get_last_n_messages(runner_id, n=15)
+    todays_plan = sheets.get_todays_plan(runner_id)
+
+    # Use compact memory for long-term context + only last 5 messages for current thread
+    memory          = sheets.get_runner_memory(runner_id) or {}
+    recent_messages = sheets.get_last_n_messages(runner_id, n=5)
+
+    # Merge memory into runner_data so template selector can use it
+    if memory:
+        runner_data = {**runner_data, "_memory": memory}
 
     intent = classify_intent(message)
     response = await select_template_response(

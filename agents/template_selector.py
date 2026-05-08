@@ -105,10 +105,23 @@ async def _fill_creative_vars(
     if not needed_vars:
         return {}
 
+    # Build context block: memory summary (long-term) + recent thread (short-term)
     history_block = ""
+
+    memory = runner.get("_memory", {})
+    if memory:
+        mem_parts = []
+        if memory.get("summary"):        mem_parts.append(f"Background: {memory['summary']}")
+        if memory.get("known_issues"):   mem_parts.append(f"Known issues: {memory['known_issues']}")
+        if memory.get("coaching_notes"): mem_parts.append(f"Coaching style: {memory['coaching_notes']}")
+        if memory.get("recent_form"):    mem_parts.append(f"Recent form: {memory['recent_form']}")
+        if memory.get("watch_points"):   mem_parts.append(f"Watch: {memory['watch_points']}")
+        if mem_parts:
+            history_block = "\n\nRunner memory (AI-generated daily summary):\n" + "\n".join(mem_parts)
+
     if history:
         lines = []
-        for m in history[-14:]:
+        for m in history[-5:]:
             direction = m.get("direction", "")
             text = (m.get("message") or "").strip()
             if not text:
@@ -118,7 +131,7 @@ async def _fill_creative_vars(
             elif direction == "outbound":
                 lines.append(f"Coach AI: {text}")
         if lines:
-            history_block = "\n\nConversation so far (oldest→newest):\n" + "\n".join(lines)
+            history_block += "\n\nCurrent conversation:\n" + "\n".join(lines)
 
     # Fetch context for Strava links; warn about other URLs we can't access
     url_note = ""

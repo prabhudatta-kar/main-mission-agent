@@ -445,6 +445,26 @@ class FirebaseClient:
     def get_all_system_prompts(self) -> list:
         return self._stream(self._col("system_prompts"))
 
+    # ── Runner Memory (compact daily summary) ────────────────────────────────
+
+    def get_runner_memory(self, runner_id: str) -> dict:
+        return _doc(self._col("runner_memory").document(runner_id).get())
+
+    def save_runner_memory(self, runner_id: str, memory: dict):
+        self._col("runner_memory").document(runner_id).set({
+            "runner_id":    runner_id,
+            "last_updated": _now_ist(),
+            **memory,
+        })
+        logger.info(f"Saved memory for runner {runner_id}")
+
+    def get_all_runner_conversations(self, runner_id: str, limit: int = 200) -> list:
+        """All conversations for a runner, sorted oldest→newest, capped for memory building."""
+        msgs = self._stream(self._col("conversations").where("runner_id", "==", runner_id))
+        msgs = [m for m in msgs if m.get("message")]
+        msgs.sort(key=lambda m: m.get("timestamp", ""))
+        return msgs[-limit:]
+
     # ── Platform Log ──────────────────────────────────────────────────────────
 
     def log_platform_event(self, event_type: str, runner_id: str, coach_id: str,

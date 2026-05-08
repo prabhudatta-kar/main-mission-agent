@@ -33,4 +33,5 @@ EVENING_CHECKIN_HOUR = int(os.getenv("EVENING_CHECKIN_HOUR", 19))
 DIGEST_HOUR          = int(os.getenv("DIGEST_HOUR", 21))
 SYSTEM_WATCHER_HOUR  = int(os.getenv("SYSTEM_WATCHER_HOUR", 23))   # 11 PM — after all conversations settle
 COACH_WATCHER_HOUR   = int(os.getenv("COACH_WATCHER_HOUR", 22))    # 10 PM — coach reads it before bed
+MEMORY_BUILD_HOUR    = int(os.getenv("MEMORY_BUILD_HOUR", 1))       # 1 AM — after all jobs settle
 OBSERVATIONS_MODEL   = os.getenv("OBSERVATIONS_MODEL", "gpt-4o")   # richer model for watcher analysis

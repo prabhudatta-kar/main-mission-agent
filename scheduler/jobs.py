@@ -1,5 +1,5 @@
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from config.settings import MORNING_MESSAGE_HOUR, EVENING_CHECKIN_HOUR, DIGEST_HOUR, SYSTEM_WATCHER_HOUR, COACH_WATCHER_HOUR
+from config.settings import MORNING_MESSAGE_HOUR, EVENING_CHECKIN_HOUR, DIGEST_HOUR, SYSTEM_WATCHER_HOUR, COACH_WATCHER_HOUR, MEMORY_BUILD_HOUR
 from integrations.firebase_db import sheets
 from integrations.whatsapp import whatsapp
 
@@ -12,7 +12,13 @@ def start_scheduler():
     scheduler.add_job(send_coach_digest,      "cron", hour=DIGEST_HOUR,          minute=0)
     scheduler.add_job(_run_system_watcher,    "cron", hour=SYSTEM_WATCHER_HOUR,  minute=30)
     scheduler.add_job(_run_coach_watcher,     "cron", hour=COACH_WATCHER_HOUR,   minute=0)
+    scheduler.add_job(_build_runner_memories, "cron", hour=MEMORY_BUILD_HOUR,    minute=0)
     scheduler.start()
+
+
+async def _build_runner_memories():
+    from agents.memory_builder import build_all_runner_memories
+    await build_all_runner_memories()
 
 
 async def _run_system_watcher():
