@@ -29,6 +29,9 @@ app = FastAPI(lifespan=lifespan)
 app.include_router(dashboard_router)
 app.include_router(test_router)
 
+# Stores the last raw Wati webhook payload for debugging
+_last_webhook: dict = {}
+
 
 @app.post("/webhook")
 async def webhook(request: Request, token: str = Query(default="")):
@@ -36,14 +39,23 @@ async def webhook(request: Request, token: str = Query(default="")):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     data = await request.json()
-    msg_type = data.get("type", "")
 
-    # Only process inbound text messages; skip delivery/read receipts etc.
+    # Store for debugging — visit /webhook/last to verify Wati is reaching the server
+    global _last_webhook
+    _last_webhook = data
+
+    msg_type = data.get("type", "")
     if msg_type not in ("text", "message", ""):
         return {"status": "ignored"}
 
     await handle_incoming(data)
     return {"status": "ok"}
+
+
+@app.get("/webhook/last")
+async def webhook_last():
+    """Shows the last payload received from Wati — use to verify webhook is configured."""
+    return _last_webhook or {"info": "No webhook received yet. Configure Wati → Settings → Webhooks."}
 
 
 @app.post("/razorpay/webhook")

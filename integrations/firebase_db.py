@@ -351,6 +351,21 @@ class FirebaseClient:
         msgs.sort(key=lambda m: m.get("timestamp", ""))
         return msgs[-n:]
 
+    def is_within_session_window(self, runner_id: str) -> bool:
+        """True if the runner sent an inbound message within the last 24 hours.
+        If so, WhatsApp allows free-form send_text instead of templates."""
+        from datetime import datetime
+        msgs = self.get_last_n_messages(runner_id, n=10)
+        for m in reversed(msgs):
+            if m.get("direction") != "inbound" or not m.get("message"):
+                continue
+            try:
+                ts = datetime.strptime(m["timestamp"], "%Y-%m-%d %H:%M:%S")
+                return (datetime.now() - ts).total_seconds() < 86400
+            except Exception:
+                continue
+        return False
+
     def get_all_recent_messages(self, n: int = 3) -> dict:
         all_msgs: dict = {}
         for m in self._stream(self._col("conversations")):

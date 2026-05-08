@@ -13,6 +13,20 @@ def start_scheduler():
     scheduler.start()
 
 
+async def _send(runner: dict, message: str, template_name: str, variables: dict):
+    """
+    Send via free-form text if runner is in an active WhatsApp session (messaged within 24h),
+    otherwise use a pre-approved template.
+    """
+    phone = runner["phone"]
+    rid   = runner["runner_id"]
+
+    if sheets.is_within_session_window(rid):
+        await whatsapp.send_text(phone, message)
+    else:
+        await whatsapp.send_template(phone=phone, template_name=template_name, variables=variables)
+
+
 async def send_morning_messages():
     for runner in sheets.get_all_active_runners():
         plan = sheets.get_todays_plan(runner["runner_id"])
@@ -22,29 +36,31 @@ async def send_morning_messages():
         rid      = runner["runner_id"]
         coach_id = runner["coach_id"]
         first    = runner["name"].split()[0]
+        weeks    = _weeks_left(runner.get("race_date", ""))
+        race     = runner.get("race_goal", "your race")
 
         if plan["day_type"] == "Rest":
-            template = "mm_morning_rest_day"
-            msg_text = f"Rest day today, {first}! Recovery is where the gains happen 💪"
+            message   = f"Rest day today, {first}! You've put in the hard work — recovery is where the fitness actually builds. Reply READY if you're set for tomorrow 💪"
+            template  = "mm_morning_rest_day"
             variables = {"first_name": first}
         else:
+            session = plan.get("session_type", "Run")
+            dist    = plan.get("distance_km", "")
+            intens  = plan.get("intensity", "easy")
+            message  = f"Morning {first}! Today: {session} — {dist}km at {intens} pace. {weeks}w to {race}. Reply GO for full details 🏃"
             template = "mm_morning_run"
-            msg_text = (f"Morning {first}! Today: {plan.get('session_type','')} — "
-                       f"{plan.get('distance_km','')}km at {plan.get('intensity','')} pace 🏃")
             variables = {
-                "first_name":    first,
-                "session_type":  plan.get("session_type", ""),
-                "distance":      str(plan.get("distance_km", "")),
-                "intensity":     plan.get("intensity", ""),
-                "weeks_to_race": str(_weeks_left(runner.get("race_date", ""))),
-                "race_goal":     runner.get("race_goal", "your race"),
+                "first_name":   first,
+                "session_type": session,
+                "distance":     str(dist),
+                "intensity":    intens,
+                "weeks_to_race": str(weeks),
+                "race_goal":    race,
             }
 
-        await whatsapp.send_template(phone=runner["phone"], template_name=template, variables=variables)
+        await _send(runner, message, template, variables)
         sheets.mark_plan_sent(plan["plan_id"])
-
-        # Log to Firebase so it appears in dashboard history
-        sheets.log_conversation(rid, coach_id, inbound="", outbound=msg_text, intent="workout")
+        sheets.log_conversation(rid, coach_id, inbound="", outbound=message, intent="workout")
 
 
 async def evening_checkin():
@@ -52,25 +68,20 @@ async def evening_checkin():
         rid      = runner["runner_id"]
         coach_id = runner["coach_id"]
         first    = runner["name"].split()[0]
-        msg_text = f"Hey {first}, missed you on the roads today! Rest day or life happened? Just reply 🙂"
+        message  = f"Hey {first}, missed you on the roads today! Rest day or life happened? Just reply and let me know 🙂"
 
-        await whatsapp.send_template(
-            phone=runner["phone"],
-            template_name="mm_evening_checkin",
-            variables={"first_name": first}
-        )
-        sheets.log_conversation(rid, coach_id, inbound="", outbound=msg_text, intent="checkin")
+        await _send(runner, message, "mm_evening_checkin", {"first_name": first})
+        sheets.log_conversation(rid, coach_id, inbound="", outbound=message, intent="checkin")
 
 
 async def send_coach_digest():
     for coach in sheets.get_all_active_coaches():
-        summary      = sheets.get_todays_summary(coach["coach_id"])
-        completed    = summary["completed"]
-        total        = summary["total"]
+        summary       = sheets.get_todays_summary(coach["coach_id"])
+        completed     = summary["completed"]
+        total         = summary["total"]
         flagged_count = len(summary["flagged"])
-
-        flag_text = f" {flagged_count} flagged." if flagged_count else ""
-        digest    = f"Today: {completed}/{total} completed.{flag_text} Reply SUMMARY for details."
+        flag_text     = f" {flagged_count} flagged." if flagged_count else ""
+        digest        = f"Today: {completed}/{total} completed.{flag_text} Reply SUMMARY for details."
         await whatsapp.send_text(coach["coach_phone"], digest)
 
 
