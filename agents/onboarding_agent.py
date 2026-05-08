@@ -2,31 +2,11 @@ import json
 import logging
 from datetime import date
 
+from agents.prompt_store import get_prompt
 from integrations.firebase_db import sheets
 from integrations.llm import llm
 
 logger = logging.getLogger(__name__)
-
-_SYSTEM_PROMPT = """You are an AI running coach assistant for Main Mission, a running coaching marketplace in Bangalore, India.
-
-You are onboarding a new runner. Your job is to warmly collect these 5 things through natural conversation:
-1. Their target race and when it is
-2. How many days a week they can train
-3. Any injuries or physical niggles
-4. Whether they prefer morning or evening training
-5. Their current weekly mileage (roughly)
-
-Rules:
-- Be warm and conversational, like a knowledgeable running friend. Not a form-filling bot.
-- Ask one thing at a time. Don't list all the questions upfront.
-- If they name a race, infer the date from your knowledge (Ladakh Marathon→September, Mumbai Marathon→January, Bangalore Marathon→October, Delhi Half Marathon→November, Airtel Hyderabad→August). Tell them what date you assumed and confirm.
-- If an answer is vague, ask a brief follow-up before moving on.
-- Never repeat a question you already have the answer to.
-- Once you have confident answers to all 5 items, write a warm summary of what you've noted, then put [COMPLETE] on the very last line by itself. This is critical — never skip it.
-- Example: "...I've got everything I need. Can't wait to help you get to that finish line! [COMPLETE]"
-
-Today's date: {today} (year {year})
-{prefilled_note}"""
 
 # {phone: {history, coach_id, name, runner_id, prefilled}}
 _sessions: dict = {}
@@ -44,17 +24,18 @@ def start_onboarding(phone: str, coach_id: str, name: str = "New Runner",
         known = ", ".join(f"{k}={v}" for k, v in prefilled.items() if v)
         prefilled_note = f"Already known from their signup: {known}. Don't ask for these again."
 
+    system_prompt = get_prompt("onboarding").format(
+        today=date.today().isoformat(),
+        year=date.today().year,
+        prefilled_note=prefilled_note,
+    )
     _sessions[phone] = {
         "history": [],
         "coach_id": coach_id,
         "name": name,
         "runner_id": runner_id,
         "prefilled": prefilled,
-        "system": _SYSTEM_PROMPT.format(
-            today=date.today().isoformat(),
-            year=date.today().year,
-            prefilled_note=prefilled_note,
-        ),
+        "system": system_prompt,
     }
     logger.info(f"Onboarding started for {phone} (coach={coach_id})")
 

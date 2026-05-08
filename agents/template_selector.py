@@ -9,6 +9,7 @@ import json
 import logging
 import re
 
+from agents.prompt_store import get_prompt
 from integrations.llm import llm
 from integrations.strava import STRAVA_ACTIVITY_RE, fetch_strava_context
 from templates.catalog import TEMPLATES, fill_template
@@ -128,27 +129,19 @@ async def _fill_creative_vars(
         url_note = "\nNOTE: The runner shared a URL you cannot access. Do not invent data from it — ask them to paste the key numbers directly.\n"
 
     descriptions = {v: _CREATIVE_DESCRIPTIONS.get(v, "short relevant value") for v in needed_vars}
-    prompt = f"""You are filling template variables for an AI running coach replying on WhatsApp.
-
-Runner: {base_vars['first_name']}, training for {base_vars['race_goal']}{history_block}
-
-Latest message from runner: "{message}"{url_note}
-
-RULES (critical):
-- Reference SPECIFIC facts from the conversation above — e.g. if the runner said "glutes", say "glutes", not a generic body part.
-- NEVER invent numbers (pace, distance, heart rate) that the runner did not explicitly state.
-- If you genuinely don't have enough information to answer precisely, say so honestly and ask for the detail.
-- Keep each variable SHORT (1-2 sentences max). No greetings.
-
-Fill these variables:
-{json.dumps(descriptions, indent=2)}
-
-Return ONLY valid JSON with exactly these keys."""
+    user_prompt = get_prompt("creative_vars_user").format(
+        first_name=base_vars["first_name"],
+        race_goal=base_vars["race_goal"],
+        history_block=history_block,
+        message=message,
+        url_note=url_note,
+        descriptions=json.dumps(descriptions, indent=2),
+    )
 
     try:
         raw = await llm.complete([
-            {"role": "system", "content": "You are a precise running coach assistant. Fill template variables using only facts from the conversation. Never fabricate data. Return only valid JSON, no markdown."},
-            {"role": "user", "content": prompt},
+            {"role": "system", "content": get_prompt("creative_vars_system")},
+            {"role": "user",   "content": user_prompt},
         ])
         raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         return json.loads(raw)

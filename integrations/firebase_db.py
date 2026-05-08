@@ -397,6 +397,54 @@ class FirebaseClient:
                 "escalation_reason": "",
             })
 
+    # ── System Prompts (dynamic, editable from dashboard) ────────────────────
+
+    def get_system_prompt(self, prompt_id: str) -> dict | None:
+        return _doc(self._col("system_prompts").document(prompt_id).get())
+
+    def upsert_system_prompt(self, prompt_id: str, content: str,
+                             changed_by: str = "system", reason: str = "") -> int:
+        doc_ref = self._col("system_prompts").document(prompt_id)
+        existing = _doc(doc_ref.get())
+        version = (existing.get("version", 0) + 1) if existing else 1
+
+        # Keep last 20 versions for undo
+        history = existing.get("versions", []) if existing else []
+        if existing:
+            history = [{"version": existing["version"],
+                        "content": existing["content"],
+                        "changed_at": existing.get("updated_at", ""),
+                        "changed_by": existing.get("last_changed_by", "system"),
+                        "reason": existing.get("last_reason", "")}] + history
+        history = history[:20]
+
+        doc_ref.set({
+            "prompt_id":       prompt_id,
+            "content":         content,
+            "version":         version,
+            "updated_at":      _now_ist(),
+            "last_changed_by": changed_by,
+            "last_reason":     reason,
+            "versions":        history,
+        })
+        logger.info(f"System prompt '{prompt_id}' updated to v{version} by {changed_by}")
+        return version
+
+    def revert_system_prompt(self, prompt_id: str, to_version: int) -> bool:
+        existing = self.get_system_prompt(prompt_id)
+        if not existing:
+            return False
+        for v in existing.get("versions", []):
+            if v["version"] == to_version:
+                self.upsert_system_prompt(prompt_id, v["content"],
+                                          changed_by="undo",
+                                          reason=f"Reverted to v{to_version}")
+                return True
+        return False
+
+    def get_all_system_prompts(self) -> list:
+        return self._stream(self._col("system_prompts"))
+
     # ── Platform Log ──────────────────────────────────────────────────────────
 
     def log_platform_event(self, event_type: str, runner_id: str, coach_id: str,
