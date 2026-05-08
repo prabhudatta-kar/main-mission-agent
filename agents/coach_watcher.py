@@ -1,16 +1,19 @@
 """
 Coach Watcher — nightly job per coach that reads their runners' conversations,
-identifies patterns in responses and coaching style gaps, then sends 1-2
-targeted questions to the coach via WhatsApp to refine their AI rules.
+identifies patterns and coaching style gaps, saves observations to Firebase,
+and sends 1-2 targeted questions to the coach via WhatsApp.
 
-Coach replies are processed by handle_coach_message → saved as new rules.
+Observations are stored in the `coach_observations` collection and viewable
+at /coachobservations/{coach_id}.
 """
 import json
 import logging
+import uuid
 from datetime import datetime, timedelta
 
 import pytz
 
+from config.settings import OBSERVATIONS_MODEL
 from integrations.firebase_db import sheets
 from integrations.llm import llm
 from integrations.whatsapp import whatsapp
@@ -19,38 +22,40 @@ logger = logging.getLogger(__name__)
 
 _IST = pytz.timezone("Asia/Kolkata")
 
-_SYSTEM_PROMPT = """You are helping improve an AI running coach's personalised style for a specific coach.
+_SYSTEM_PROMPT = """You are a coaching quality analyst for Main Mission, a WhatsApp AI running coaching platform.
 
-You'll receive:
-1. The coach's current rules and system prompt
-2. A sample of today's runner conversations
+You will receive:
+1. A coach's current rules and system prompt
+2. Today's conversations between the AI and their runners
 
-Your job is to generate 1-2 short, specific questions to ask the coach so you can better mirror their real coaching style. Focus on:
-- Moments where the AI's tone or advice might differ from the coach's actual style
-- Patterns in runner questions that the coach hasn't explicitly covered yet
-- How the coach would personally handle a specific situation from today
+Produce a structured daily observation for this coach. Identify:
+- Patterns in runner behaviour (common questions, mood, struggles)
+- Moments where the AI's tone or advice might differ from this coach's style
+- Gaps in coverage — situations the coach hasn't given rules for
+- What went well
 
-Rules:
-- Questions must be short and WhatsApp-friendly (no bullet lists, just natural sentences)
-- Ask about concrete situations from today's conversations, not hypotheticals
-- Don't ask more than 2 questions
-- If today's conversations were routine and well-handled, send a brief positive note + 1 forward-looking question
-- If there's nothing useful to ask, return null
+Then craft 1-2 short WhatsApp-friendly questions (no bullet lists, natural sentences) to send to the coach
+to better understand their style for the situations you found.
+If conversations were routine and well-handled, send a positive note + one forward-looking question.
+If there is genuinely nothing useful to ask, set should_send to false.
 
 Return ONLY valid JSON (no markdown):
 {
+  "summary": "2-3 sentence overview of today's coaching activity",
+  "patterns": [
+    {"title": "short label", "description": "what you noticed", "frequency": "once|recurring"}
+  ],
+  "style_gaps": [
+    {"situation": "describe it", "current_ai_approach": "what the AI did", "question_for_coach": "what you'd ask"}
+  ],
+  "wins": ["short win description"],
   "should_send": true,
-  "message": "the WhatsApp message to send to the coach (2-4 sentences max)"
-}
-OR
-{
-  "should_send": false,
-  "reason": "why nothing is worth asking today"
+  "coach_message": "the WhatsApp message to send — 2-4 sentences, conversational"
 }"""
 
 
 async def run_coach_watcher():
-    """For each active coach, analyse runner conversations and send style questions."""
+    """For each active coach, analyse runner conversations, save observation, send question."""
     logger.info("Coach watcher: starting")
     for coach in sheets.get_all_active_coaches():
         try:
@@ -60,10 +65,9 @@ async def run_coach_watcher():
 
 
 async def _process_coach(coach: dict):
-    coach_id = coach["coach_id"]
+    coach_id    = coach["coach_id"]
     coach_phone = coach.get("coach_phone", "")
-    coach_name = coach.get("name", "Coach")
-    first = coach_name.split()[0]
+    first       = (coach.get("name") or "Coach").split()[0]
 
     runners = sheets.get_coach_runners(coach_id)
     if not runners:
@@ -74,42 +78,63 @@ async def _process_coach(coach: dict):
         logger.info(f"Coach watcher: no conversations for coach {coach_id}")
         return
 
-    rules = sheets.get_all_coach_rules(coach_id)
-    config = sheets.get_coach_config(coach_id)
-    active_version = config.get("active_prompt_version", "v1") if config else "v1"
-    current_prompt = (config or {}).get(f"system_prompt_{active_version}", "") if config else ""
+    rules          = sheets.get_all_coach_rules(coach_id)
+    config         = sheets.get_coach_config(coach_id) or {}
+    active_version = config.get("active_prompt_version", "v1")
+    current_prompt = config.get(f"system_prompt_{active_version}", "")
 
-    context = _build_context(convos, rules, current_prompt)
+    context = _build_context(convos, runners, rules, current_prompt)
 
     raw = await llm.complete([
         {"role": "system", "content": _SYSTEM_PROMPT},
         {"role": "user",   "content": context},
-    ], max_tokens=600)
+    ], model=OBSERVATIONS_MODEL, max_tokens=1500)
 
-    raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+    raw    = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
     result = json.loads(raw)
 
+    # Always save to Firebase regardless of whether we send
+    obs_id = _save_observation(coach_id, result, len(convos), len(runners))
+    logger.info(f"Coach watcher: saved observation {obs_id} for coach {coach_id}")
+
     if not result.get("should_send"):
-        logger.info(f"Coach watcher: nothing to ask coach {coach_id} — {result.get('reason','')}")
+        logger.info(f"Coach watcher: nothing to send for coach {coach_id}")
         return
 
-    message = result["message"]
-    full_message = f"Hi {first} 👋 Quick coaching question from your AI:\n\n{message}\n\nJust reply here and I'll update your settings."
+    coach_msg  = result.get("coach_message", "")
+    full_msg   = f"Hi {first} 👋 Quick coaching question from your AI:\n\n{coach_msg}\n\nJust reply here and I'll update your settings."
 
-    await whatsapp.send_text(coach_phone, full_message)
+    await whatsapp.send_text(coach_phone, full_msg)
     logger.info(f"Coach watcher: sent question to coach {coach_id}")
 
-    sheets.log_platform_event(
-        "coach_watcher", "", coach_id,
-        f"Sent coaching style question: {message[:100]}"
-    )
+    # Mark that message was sent, so we can show it in the dashboard
+    sheets._col("coach_observations").document(obs_id).update({"message_sent": full_msg})
+
+
+def _save_observation(coach_id: str, result: dict, convo_count: int, runner_count: int) -> str:
+    obs_id = f"COBS_{str(uuid.uuid4())[:8].upper()}"
+    sheets._col("coach_observations").document(obs_id).set({
+        "obs_id":        obs_id,
+        "coach_id":      coach_id,
+        "created_at":    datetime.now(_IST).strftime("%Y-%m-%d %H:%M:%S"),
+        "date":          datetime.now(_IST).strftime("%Y-%m-%d"),
+        "convo_count":   convo_count,
+        "runner_count":  runner_count,
+        "summary":       result.get("summary", ""),
+        "patterns":      result.get("patterns", []),
+        "style_gaps":    result.get("style_gaps", []),
+        "wins":          result.get("wins", []),
+        "message_sent":  "",   # filled in after sending
+        "coach_reply":   "",   # filled in when coach replies via WhatsApp
+    })
+    return obs_id
 
 
 def _get_runner_conversations(runners: list, hours: int = 24) -> list:
-    cutoff = (datetime.now(_IST) - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
+    cutoff     = (datetime.now(_IST) - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
     runner_ids = {r["runner_id"] for r in runners}
-    all_msgs = sheets._stream(sheets._col("conversations"))
-    recent = [
+    all_msgs   = sheets._stream(sheets._col("conversations"))
+    recent     = [
         m for m in all_msgs
         if m.get("runner_id") in runner_ids
         and m.get("timestamp", "") >= cutoff
@@ -119,8 +144,9 @@ def _get_runner_conversations(runners: list, hours: int = 24) -> list:
     return recent
 
 
-def _build_context(convos: list, rules: list, current_prompt: str) -> str:
-    # Format conversations
+def _build_context(convos: list, runners: list, rules: list, current_prompt: str) -> str:
+    name_map = {r["runner_id"]: r.get("name", r["runner_id"]) for r in runners}
+
     by_runner: dict = {}
     for m in convos:
         rid = m.get("runner_id", "unknown")
@@ -128,21 +154,30 @@ def _build_context(convos: list, rules: list, current_prompt: str) -> str:
 
     convo_block = []
     for rid, thread in by_runner.items():
-        lines = [f"[Runner {rid}]"]
+        name  = name_map.get(rid, rid)
+        lines = [f"[{name}]"]
         for m in thread:
             prefix = "AI →" if m["direction"] == "outbound" else "Runner:"
-            lines.append(f"  {prefix} {m.get('message','')[:200]}")
+            lines.append(f"  {prefix} {m.get('message','')[:250]}")
         convo_block.append("\n".join(lines))
 
     rules_text = "\n".join(
         f"- {r.get('rule_derived','')}" for r in rules[:20] if r.get("status") == "Active"
-    ) or "No rules yet."
+    ) or "No rules set yet."
 
     return f"""Coach's current style rules:
 {rules_text}
 
-Coach's current system prompt:
+Coach's system prompt:
 {current_prompt[:800] or 'Not set yet.'}
 
-Today's conversations:
-{chr(10).join(convo_block)[:6000]}"""
+Today's conversations ({len(runners)} runners, {len(convos)} messages):
+{chr(10).join(convo_block)[:7000]}"""
+
+
+def get_coach_observations(coach_id: str, limit: int = 30) -> list:
+    obs = sheets._stream(
+        sheets._col("coach_observations").where("coach_id", "==", coach_id)
+    )
+    obs.sort(key=lambda o: o.get("created_at", ""), reverse=True)
+    return obs[:limit]

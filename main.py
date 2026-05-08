@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from agents.master_agent import handle_incoming
 from config.settings import WEBHOOK_SECRET_TOKEN
 from integrations.razorpay import razorpay_webhook, verify_signature
+from routers.coachobservations import router as coachobs_router
 from routers.dashboard import router as dashboard_router
 from routers.sysobservations import router as sysobs_router
 from routers.test_ui import router as test_router
@@ -30,6 +31,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 app.include_router(dashboard_router)
 app.include_router(sysobs_router)
+app.include_router(coachobs_router)
 app.include_router(test_router)
 
 # Stores the last raw Wati webhook payload for debugging (set before auth so we can diagnose 401s)

@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 
 import pytz
 
+from config.settings import OBSERVATIONS_MODEL
 from integrations.firebase_db import sheets
 from integrations.llm import llm
 
@@ -64,7 +65,7 @@ async def run_system_watcher():
         raw = await llm.complete([
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user",   "content": f"Conversations to analyse:\n\n{analysis_text}"},
-        ], max_tokens=2000)
+        ], model=OBSERVATIONS_MODEL, max_tokens=2000)
 
         raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         result = json.loads(raw)
