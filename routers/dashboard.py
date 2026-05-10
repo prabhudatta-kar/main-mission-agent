@@ -1283,6 +1283,7 @@ async function openPanel(runnerId, focusCompose = false) {
     <div class="profile-row"><span class="lbl">Started</span><span class="val">${r.start_date||'—'}</span></div>
     <div class="profile-row"><span class="lbl">Payment</span><span class="val">${r.payment_status||'—'} · ₹${r.monthly_fee||'—'}/mo</span></div>
     <div class="profile-row"><span class="lbl">Race distance</span><span class="val">${r.race_distance||'—'}</span></div>
+    ${(r.races && r.races.length > 1) ? `<div class="profile-row"><span class="lbl">All races</span><span class="val" style="text-align:right">${r.races.map(rc=>`${rc.name}${rc.distance?' '+rc.distance:''} ${rc.date?'('+rc.date+')':''}`).join('<br>')}</span></div>` : ''}
     <div class="profile-row"><span class="lbl">Injuries</span><span class="val">${inj}</span></div>
     ${r.additional_notes ? `<div style="background:#f0f9ff;border-radius:8px;padding:10px 12px;font-size:12px;color:#0369a1;margin-top:8px;line-height:1.5"><strong>Runner notes:</strong> ${r.additional_notes}</div>` : ''}
     ${r.notes ? `<div style="background:#f9f9f9;border-radius:8px;padding:10px 12px;font-size:12px;color:#555;margin-top:6px;line-height:1.5">${r.notes}</div>` : ''}

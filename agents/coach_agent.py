@@ -47,6 +47,12 @@ async def generate_runner_response(sender: dict, message: str) -> dict:
         runner_data = {**runner_data, "_memory": memory}
 
     intent = classify_intent(message)
+
+    if intent == "race_update":
+        response = await _handle_race_update(runner_id, runner_data, message)
+        sheets.log_conversation(runner_id, coach_id, message, response, intent)
+        return {"response": response, "intent": intent}
+
     response = await select_template_response(
         runner=runner_data,
         plan=todays_plan,
@@ -59,6 +65,58 @@ async def generate_runner_response(sender: dict, message: str) -> dict:
     sheets.update_plan_feedback(runner_id, message)
 
     return {"response": response, "intent": intent}
+
+
+async def _handle_race_update(runner_id: str, runner_data: dict, message: str) -> str:
+    """Detect the new race from the message, look it up, and add it to the runner's profile."""
+    first = (runner_data.get("name") or "there").split()[0]
+    if first == "New":
+        first = "there"
+
+    try:
+        from integrations.race_lookup import lookup_race
+        from integrations.llm import llm as _llm
+        import json as _json
+
+        # Ask LLM to extract race name and distance from the message
+        raw = await _llm.complete([
+            {"role": "system", "content": "Extract the race name and distance from the runner's message. Return only valid JSON."},
+            {"role": "user", "content": f"""Message: "{message}"
+
+Return JSON:
+{{"race_name": "name of the race mentioned", "distance": "distance if mentioned e.g. 42.2km, 21.1km, 10km — empty string if not mentioned"}}"""},
+        ])
+        raw  = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        data = _json.loads(raw)
+        race_name = data.get("race_name", "").strip()
+        distance  = data.get("distance", "").strip()
+
+        if not race_name:
+            return f"Which race did you sign up for? Let me add it to your schedule."
+
+        race = await lookup_race(race_name)
+        if race:
+            name = race.get("name", race_name)
+            date = race.get("date", "")
+            distances = race.get("distances", [])
+
+            # If distance not mentioned and race has multiple, ask
+            if not distance and len(distances) > 1:
+                opts = " / ".join(distances[:4])
+                return f"Nice, {name}! Which distance are you targeting — {opts}?"
+
+            distance = distance or (distances[0] if distances else "")
+            sheets.add_runner_race(runner_id, name, date, distance)
+
+            date_str = f" on {date}" if date else ""
+            dist_str = f" {distance}" if distance else ""
+            return f"Added {name}{dist_str}{date_str} to your race schedule. Your plan will account for both races."
+        else:
+            return f"I've noted that you've signed up for {race_name}. Could you confirm the date so I can update your schedule?"
+
+    except Exception as e:
+        logger.error(f"Race update handling failed: {e}")
+        return f"Tell me more about the race you signed up for and I'll add it to your schedule."
 
 
 async def handle_runner_message(sender: dict, message: str):

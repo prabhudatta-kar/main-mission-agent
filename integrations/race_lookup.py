@@ -154,11 +154,23 @@ async def lookup_race(query: str) :
 
     # 1. Try Firebase
     match = find_race_in_db(query)
+
+    # 2. If found but date is empty, web search to fill the date
+    if match and not match.get("date"):
+        logger.info(f"Race '{match['name']}' in DB but missing date — searching web")
+        snippet = await _web_search(f"{match['name']} 2026 date India running race")
+        updated = await _llm_extract(match["name"], snippet)
+        if updated and updated.get("date"):
+            match["date"] = updated["date"]
+            upsert_race({**match, **updated, "source": "web_search"})
+            logger.info(f"Date filled for '{match['name']}': {updated['date']}")
+        return match
+
     if match:
         logger.info(f"Race found in DB: {match['name']} for query '{query}'")
         return match
 
-    # 2. Web search + LLM extract
+    # 3. Not in DB — web search + LLM extract
     logger.info(f"Race '{query}' not in DB — searching web")
     snippet = await _web_search(f"{query} India marathon running race date 2026")
     race    = await _llm_extract(query, snippet)

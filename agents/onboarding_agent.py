@@ -91,6 +91,7 @@ async def _complete_onboarding(phone: str, session: dict) -> None:
     existing_runner_id = session.get("runner_id")
     if existing_runner_id:
         update_fields = {
+            "races":            parsed.get("races", []),
             "race_goal":        parsed.get("race_goal", ""),
             "race_date":        parsed.get("race_date", ""),
             "race_distance":    parsed.get("race_distance", ""),
@@ -109,6 +110,7 @@ async def _complete_onboarding(phone: str, session: dict) -> None:
             "name":             session.get("name", ""),
             "phone":            phone,
             "coach_id":         session.get("coach_id", ""),
+            "races":            parsed.get("races", []),
             "race_goal":        parsed.get("race_goal", ""),
             "race_date":        parsed.get("race_date", ""),
             "race_distance":    parsed.get("race_distance", ""),
@@ -159,9 +161,13 @@ Also consider these already-known values: {json.dumps(prefilled)}
 Return this exact JSON, no markdown:
 {{
   "name": "runner's first and last name if mentioned, else empty string",
-  "race_goal": "short race name",
-  "race_date": "YYYY-MM-DD — use the date mentioned or inferred in conversation; if only month known use the 15th; empty string if unknown",
-  "race_distance": "target distance e.g. '42.2km', '21.1km', '10km' — empty string if not mentioned",
+  "races": [
+    {{
+      "name": "race name",
+      "date": "YYYY-MM-DD or empty string if unknown",
+      "distance": "42.2km / 21.1km / 10km etc, empty if not mentioned"
+    }}
+  ],
   "weekly_days": 4,
   "injuries": "description or None",
   "fitness_level": "Beginner (under 20km/wk) or Intermediate (20-50km/wk) or Advanced (50km+/wk)",
@@ -176,13 +182,33 @@ Return this exact JSON, no markdown:
         raw    = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         parsed = json.loads(raw)
 
-        # Resolve race against the race calendar — corrects dates and normalises names
-        if parsed.get("race_goal"):
-            resolved = await _resolve_race(parsed["race_goal"])
-            if resolved:
-                parsed["race_goal"] = resolved.get("name", parsed["race_goal"])
-                if resolved.get("date") and not parsed.get("race_date"):
-                    parsed["race_date"] = resolved["date"]
+        # Resolve each race against the calendar
+        races = parsed.get("races") or []
+        if not races and parsed.get("race_goal"):
+            # backwards compat if LLM returned old format
+            races = [{"name": parsed["race_goal"], "date": parsed.get("race_date", ""), "distance": parsed.get("race_distance", "")}]
+
+        resolved_races = []
+        for r in races:
+            result = await _resolve_race(r.get("name", ""))
+            if result:
+                resolved_races.append({
+                    "name":     result.get("name", r["name"]),
+                    "date":     r.get("date") or result.get("date", ""),
+                    "distance": r.get("distance", ""),
+                })
+            else:
+                resolved_races.append(r)
+
+        parsed["races"] = resolved_races
+        # Primary race = first upcoming one
+        from datetime import date as _dt
+        today = _dt.today().isoformat()
+        upcoming = sorted([r for r in resolved_races if r.get("date", "") >= today], key=lambda r: r["date"])
+        primary = upcoming[0] if upcoming else (resolved_races[0] if resolved_races else {})
+        parsed["race_goal"]     = primary.get("name", "")
+        parsed["race_date"]     = primary.get("date", "")
+        parsed["race_distance"] = primary.get("distance", "")
 
         return parsed
     except Exception as e:

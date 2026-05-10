@@ -138,6 +138,31 @@ class FirebaseClient:
         logger.info(f"Created runner {runner_id} — {data.get('name')}")
         return runner_id
 
+    def add_runner_race(self, runner_id: str, name: str, date: str, distance: str):
+        """Add a race to the runner's races array. Updates primary race fields if it's sooner."""
+        runner = self.get_runner(runner_id)
+        if not runner:
+            return
+        races = runner.get("races") or []
+        # Avoid duplicates by name
+        races = [r for r in races if r.get("name", "").lower() != name.lower()]
+        races.append({"name": name, "date": date, "distance": distance})
+        races.sort(key=lambda r: r.get("date", ""))
+
+        fields: dict = {"races": races}
+        # Sync primary fields to the next upcoming race
+        from datetime import date as dt
+        today = dt.today().isoformat()
+        upcoming = [r for r in races if r.get("date", "") >= today]
+        if upcoming:
+            primary = upcoming[0]
+            fields["race_goal"]     = primary["name"]
+            fields["race_date"]     = primary["date"]
+            fields["race_distance"] = primary["distance"]
+
+        self.update_runner(runner_id, fields)
+        logger.info(f"Added race '{name}' to runner {runner_id}")
+
     def update_runner(self, runner_id: str, fields: dict):
         if "phone" in fields:
             fields["phone_normalized"] = normalize_phone(fields["phone"])
