@@ -23,7 +23,7 @@ def start_onboarding(phone: str, coach_id: str, name: str = "New Runner",
     notes = []
 
     if not name or name in ("New Runner", ""):
-        notes.append("Runner's name is NOT known — ask for their name as the very first question.")
+        notes.append("Runner's name is NOT known — ask for their full name (first and last) as the very first question.")
 
     if prefilled:
         known = ", ".join(f"{k}={v}" for k, v in prefilled.items() if v)
