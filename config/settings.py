@@ -24,7 +24,8 @@ DEFAULT_COACH_ID      = os.getenv("DEFAULT_COACH_ID", "COACH_A")
 
 WEBHOOK_SECRET_TOKEN    = os.getenv("WEBHOOK_SECRET_TOKEN", "")
 WHATSAPP_BUSINESS_PHONE = os.getenv("WHATSAPP_BUSINESS_PHONE", "919019585359")  # for wa.me links
-PAYMENT_LINK            = os.getenv("PAYMENT_LINK", "")  # Razorpay subscription link shown to unknown numbers
+PAYMENT_LINK            = os.getenv("PAYMENT_LINK", "")
+APP_URL                 = os.getenv("APP_URL", "https://web-production-a1ef8.up.railway.app")
 
 APP_ENV = os.getenv("APP_ENV", "development")
 TIMEZONE = os.getenv("TIMEZONE", "Asia/Kolkata")

@@ -5,7 +5,7 @@ from datetime import date
 
 import httpx
 
-from config.settings import RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET, RAZORPAY_PLAN_ID, RAZORPAY_WEBHOOK_SECRET
+from config.settings import APP_URL, RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET, RAZORPAY_PLAN_ID, RAZORPAY_WEBHOOK_SECRET
 from integrations.firebase_db import sheets
 from integrations.whatsapp import whatsapp
 
@@ -195,14 +195,15 @@ async def create_subscription(name: str, phone: str, coach_id: str, runner_id: s
                 "https://api.razorpay.com/v1/subscriptions",
                 auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET),
                 json={
-                    "plan_id":       RAZORPAY_PLAN_ID,
-                    "total_count":   120,    # 10 years — effectively perpetual until cancelled
-                    "customer_notify": 0,    # we notify via WhatsApp
+                    "plan_id":        RAZORPAY_PLAN_ID,
+                    "total_count":    120,   # 10 years — effectively perpetual until cancelled
+                    "customer_notify": 0,   # we notify via WhatsApp
+                    "callback_url":   f"{APP_URL}/payment-success",
                     "notes": {
-                        "name":             name,
-                        "whatsapp_number":  phone,
-                        "coach_id":         coach_id,
-                        "runner_id":        runner_id,
+                        "name":            name,
+                        "whatsapp_number": phone,
+                        "coach_id":        coach_id,
+                        "runner_id":       runner_id,
                     },
                 },
                 timeout=15,
