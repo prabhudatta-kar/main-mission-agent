@@ -111,29 +111,47 @@ async def _run_onboarding(phone: str, sender: dict, message: str, name: str = No
 
 
 async def _handle_unpaid_runner(runner_data: dict, message: str):
-    phone = runner_data.get("phone", "")
-    link  = runner_data.get("payment_link", "")
+    phone     = runner_data.get("phone", "")
+    runner_id = runner_data.get("runner_id", "")
+    link      = runner_data.get("payment_link", "")
+    msg_upper = message.strip().upper()
 
-    if message.strip().upper() == "HELP":
+    if msg_upper == "HELP":
+        # Try stored link first, otherwise generate a new one
+        if not link:
+            try:
+                from integrations.razorpay import create_subscription
+                link = await create_subscription(
+                    name=runner_data.get("name", "Runner"),
+                    phone=phone,
+                    coach_id=runner_data.get("coach_id", ""),
+                    runner_id=runner_id,
+                )
+                if link:
+                    sheets.update_runner(runner_id, {"payment_link": link})
+            except Exception:
+                pass
+
         if link:
-            await whatsapp.send_text(phone,
-                f"Here's your subscription link:\n{link}\n\nComplete payment there to get started.")
+            reply = f"Here's your payment link:\n{link}"
         else:
-            await whatsapp.send_text(phone,
-                "Sorry, I can't find your link. Please contact us and we'll send it again.")
+            reply = "Having trouble generating your link right now. Please message us on Instagram @mainmission.run and we'll sort it out."
+
+        await whatsapp.send_text(phone, reply)
+        sheets.log_conversation(runner_id, runner_data.get("coach_id", ""), message, reply, "payment_help")
         return
 
-    # For any other message, only remind once — don't repeat on every reply
-    recent = sheets.get_last_n_messages(runner_data.get("runner_id", ""), n=10)
+    # For all other messages — only send the reminder once, then stay silent
+    recent = sheets.get_last_n_messages(runner_id, n=20)
     already_reminded = any(
-        "complete payment" in (m.get("message") or "").lower()
-        or "subscription link" in (m.get("message") or "").lower()
-        for m in recent if m.get("direction") == "outbound"
+        m.get("direction") == "outbound" and m.get("message_type") in ("payment_reminder", "payment_help")
+        for m in recent
     )
     if not already_reminded:
-        await whatsapp.send_text(phone,
-            "To get started, complete your subscription payment using the link we sent. "
-            "Type HELP if you need it resent.")
+        reply = "To get started, complete your subscription payment using the link we sent. Type HELP if you need it resent."
+        await whatsapp.send_text(phone, reply)
+        sheets.log_conversation(runner_id, runner_data.get("coach_id", ""), message, reply, "payment_reminder")
+    # If already reminded, stay silent — no reply needed for "okay", "ok", "hi" etc.
 
 
 def identify_sender(phone: str) -> dict:
