@@ -1282,8 +1282,10 @@ async function openPanel(runnerId, focusCompose = false) {
     <div class="profile-row"><span class="lbl">Weeks to race</span><span class="val">${data.weeks}</span></div>
     <div class="profile-row"><span class="lbl">Started</span><span class="val">${r.start_date||'—'}</span></div>
     <div class="profile-row"><span class="lbl">Payment</span><span class="val">${r.payment_status||'—'} · ₹${r.monthly_fee||'—'}/mo</span></div>
+    <div class="profile-row"><span class="lbl">Race distance</span><span class="val">${r.race_distance||'—'}</span></div>
     <div class="profile-row"><span class="lbl">Injuries</span><span class="val">${inj}</span></div>
-    ${r.notes ? `<div style="background:#f9f9f9;border-radius:8px;padding:10px 12px;font-size:12px;color:#555;margin-top:8px;line-height:1.5">${r.notes}</div>` : ''}
+    ${r.additional_notes ? `<div style="background:#f0f9ff;border-radius:8px;padding:10px 12px;font-size:12px;color:#0369a1;margin-top:8px;line-height:1.5"><strong>Runner notes:</strong> ${r.additional_notes}</div>` : ''}
+    ${r.notes ? `<div style="background:#f9f9f9;border-radius:8px;padding:10px 12px;font-size:12px;color:#555;margin-top:6px;line-height:1.5">${r.notes}</div>` : ''}
     <div style="display:flex;gap:8px;margin-top:16px">
       <button class="prof-edit-btn" onclick="openEditRunner('${r.runner_id}')">✏ Edit</button>
       <button class="prof-del-btn" onclick="deleteRunner('${r.runner_id}','${r.name}')">🗑 Delete runner</button>

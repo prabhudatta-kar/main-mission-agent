@@ -91,13 +91,14 @@ async def _complete_onboarding(phone: str, session: dict) -> None:
     existing_runner_id = session.get("runner_id")
     if existing_runner_id:
         update_fields = {
-            "race_goal":     parsed.get("race_goal", ""),
-            "race_date":     parsed.get("race_date", ""),
-            "race_distance": parsed.get("race_distance", ""),
-            "weekly_days":   parsed.get("weekly_days", ""),
-            "injuries":      parsed.get("injuries", "None"),
-            "fitness_level": parsed.get("fitness_level", "Intermediate"),
-            "onboarded":     "TRUE",
+            "race_goal":        parsed.get("race_goal", ""),
+            "race_date":        parsed.get("race_date", ""),
+            "race_distance":    parsed.get("race_distance", ""),
+            "weekly_days":      parsed.get("weekly_days", ""),
+            "injuries":         parsed.get("injuries", "None"),
+            "fitness_level":    parsed.get("fitness_level", "Intermediate"),
+            "additional_notes": parsed.get("additional_notes", ""),
+            "onboarded":        "TRUE",
         }
         if parsed.get("name") and session.get("name") in ("New Runner", "", None):
             update_fields["name"] = parsed["name"]
@@ -105,19 +106,20 @@ async def _complete_onboarding(phone: str, session: dict) -> None:
         runner_id = existing_runner_id
     else:
         runner_id = sheets.create_runner({
-            "name":          session.get("name", ""),
-            "phone":         phone,
-            "coach_id":      session.get("coach_id", ""),
-            "race_goal":     parsed.get("race_goal", ""),
-            "race_date":     parsed.get("race_date", ""),
-            "race_distance": parsed.get("race_distance", ""),
-            "weekly_days":   parsed.get("weekly_days", ""),
-            "injuries":      parsed.get("injuries", "None"),
-            "fitness_level": parsed.get("fitness_level", "Intermediate"),
-            "start_date":    date.today().isoformat(),
-            "status":        "Active",
-            "payment_status": "Trial",
-            "onboarded":     True,
+            "name":             session.get("name", ""),
+            "phone":            phone,
+            "coach_id":         session.get("coach_id", ""),
+            "race_goal":        parsed.get("race_goal", ""),
+            "race_date":        parsed.get("race_date", ""),
+            "race_distance":    parsed.get("race_distance", ""),
+            "weekly_days":      parsed.get("weekly_days", ""),
+            "injuries":         parsed.get("injuries", "None"),
+            "fitness_level":    parsed.get("fitness_level", "Intermediate"),
+            "additional_notes": parsed.get("additional_notes", ""),
+            "start_date":       date.today().isoformat(),
+            "status":           "Active",
+            "payment_status":   "Trial",
+            "onboarded":        True,
         })
 
     sheets.log_platform_event("onboarding", runner_id, session.get("coach_id", ""),
@@ -162,7 +164,8 @@ Return this exact JSON, no markdown:
   "race_distance": "target distance e.g. '42.2km', '21.1km', '10km' — empty string if not mentioned",
   "weekly_days": 4,
   "injuries": "description or None",
-  "fitness_level": "Beginner (under 20km/wk) or Intermediate (20-50km/wk) or Advanced (50km+/wk)"
+  "fitness_level": "Beginner (under 20km/wk) or Intermediate (20-50km/wk) or Advanced (50km+/wk)",
+  "additional_notes": "anything else the runner shared — running history, goals, lifestyle, motivation etc. Empty string if nothing"
 }}"""
 
     try:
