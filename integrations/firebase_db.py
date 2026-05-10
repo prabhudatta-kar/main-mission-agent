@@ -16,7 +16,16 @@ For Sheets sync (coach view), see integrations/sheets_sync.py.
 import json
 import logging
 import os
+import random
+import string
 import uuid
+
+
+def _make_id(prefix: str, length: int = 10) -> str:
+    """Generate a prefixed alphanumeric ID, e.g. B3F9K2X1M7 for runners."""
+    chars = string.ascii_uppercase + string.digits
+    suffix = "".join(random.choices(chars, k=length - 1))
+    return prefix + suffix
 from datetime import date, datetime
 
 import firebase_admin
@@ -104,7 +113,7 @@ class FirebaseClient:
         )
 
     def create_runner(self, data: dict) -> str:
-        runner_id = f"RUN_{str(uuid.uuid4())[:6].upper()}"
+        runner_id = _make_id("B")
         phone = data.get("phone", "")
         self._col("runners").document(runner_id).set({
             "runner_id":       runner_id,
