@@ -126,6 +126,20 @@ async def _complete_onboarding(phone: str, session: dict) -> None:
     await _send_payment_link(phone, runner_id, session)
 
 
+async def _resolve_race(race_name: str) -> dict:
+    """Look up race in Firebase, fall back to web search. Returns {name, date} or {}."""
+    if not race_name:
+        return {}
+    try:
+        from integrations.race_lookup import lookup_race
+        race = await lookup_race(race_name)
+        if race:
+            return {"name": race.get("name", race_name), "date": race.get("date", "")}
+    except Exception as e:
+        logger.warning(f"Race lookup failed for '{race_name}': {e}")
+    return {}
+
+
 async def _extract_profile(history: list, prefilled: dict) -> dict:
     today = date.today()
     history_text = "\n".join(
@@ -153,8 +167,18 @@ Return this exact JSON, no markdown:
             {"role": "system", "content": "Extract structured runner data from a conversation. Return only valid JSON."},
             {"role": "user",   "content": prompt},
         ])
-        raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-        return json.loads(raw)
+        raw    = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        parsed = json.loads(raw)
+
+        # Resolve race against the race calendar — corrects dates and normalises names
+        if parsed.get("race_goal"):
+            resolved = await _resolve_race(parsed["race_goal"])
+            if resolved:
+                parsed["race_goal"] = resolved.get("name", parsed["race_goal"])
+                if resolved.get("date") and not parsed.get("race_date"):
+                    parsed["race_date"] = resolved["date"]
+
+        return parsed
     except Exception as e:
         logger.warning(f"Profile extraction failed: {e}")
         return {"name": "", "race_goal": "", "race_date": "", "weekly_days": "", "injuries": "None", "fitness_level": "Intermediate"}
