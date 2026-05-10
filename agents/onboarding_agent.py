@@ -20,10 +20,17 @@ def is_onboarding(phone: str) -> bool:
 def start_onboarding(phone: str, coach_id: str, name: str = "New Runner",
                      runner_id: str = None, prefilled: dict = None):
     prefilled = prefilled or {}
-    prefilled_note = ""
+    notes = []
+
+    # Tell the LLM explicitly when name is unknown so it asks first
+    if not name or name in ("New Runner", ""):
+        notes.append("Runner's name is NOT known — ask for their name as the very first question.")
+
     if prefilled:
         known = ", ".join(f"{k}={v}" for k, v in prefilled.items() if v)
-        prefilled_note = f"Already known from their signup: {known}. Don't ask for these again."
+        notes.append(f"Already known from their signup: {known}. Don't ask for these again.")
+
+    prefilled_note = " ".join(notes)
 
     system_prompt = get_prompt("onboarding").format(
         today=date.today().isoformat(),

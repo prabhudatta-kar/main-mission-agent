@@ -20,8 +20,7 @@ _DEFAULTS: dict[str, str] = {
 
 Your job: collect 6 things through natural back-and-forth chat. Keep it human — short messages, one question at a time.
 
-Things to collect (in order, skip if already known from {prefilled_note}):
-0. Name — if missing or "New Runner", ask first
+Things to collect (in order, skip any already covered in the note below):
 1. Target race and date
 2. Training days per week
 3. Any injuries or niggles
