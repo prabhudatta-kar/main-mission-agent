@@ -276,7 +276,65 @@ async def api_bulk_save(req: BulkPlansReq):
         s["runner_id"] = req.runner_id
         sheets.create_plan(s)
         saved += 1
+
+    if saved > 0:
+        import asyncio
+        asyncio.create_task(_notify_plan_created(req.runner_id, req.sessions))
+
     return {"ok": True, "saved": saved, "deleted": deleted}
+
+
+async def _notify_plan_created(runner_id: str, sessions: list):
+    """Send a WhatsApp plan summary to the runner when a plan is created/updated."""
+    try:
+        runner = sheets.get_runner(runner_id)
+        if not runner:
+            return
+
+        phone = runner.get("phone", "")
+        first = (runner.get("name") or "there").split()[0]
+        if first == "New":
+            first = "there"
+
+        # Sort sessions by date and build a compact summary
+        sorted_sessions = sorted(sessions, key=lambda s: s.get("date", ""))
+        if not sorted_sessions:
+            return
+
+        lines = []
+        for s in sorted_sessions[:14]:  # cap at 2 weeks to keep message short
+            d         = s.get("date", "")
+            day_type  = s.get("day_type", "Run")
+            sess_type = s.get("session_type", "")
+            dist      = s.get("distance_km", "")
+            intensity = s.get("intensity", "")
+
+            if day_type == "Rest":
+                lines.append(f"{d}: Rest")
+            else:
+                parts = [sess_type or "Run"]
+                if dist:
+                    parts.append(f"{dist}km")
+                if intensity:
+                    parts.append(intensity)
+                lines.append(f"{d}: {' · '.join(parts)}")
+
+        total = len(sorted_sessions)
+        period_start = sorted_sessions[0].get("date", "")
+        period_end   = sorted_sessions[-1].get("date", "")
+
+        summary = "\n".join(lines)
+        msg = (
+            f"Your training plan is ready, {first} 🏃\n\n"
+            f"{summary}"
+            + (f"\n…+{total - 14} more sessions" if total > 14 else "")
+            + f"\n\nReply with any questions — we'll adjust if needed."
+        )
+
+        await whatsapp.send_text(phone, msg)
+        logger.info(f"Plan summary sent to runner {runner_id}")
+    except Exception as e:
+        logger.error(f"Failed to send plan summary to {runner_id}: {e}")
 
 
 class PlanUpdateReq(BaseModel):
