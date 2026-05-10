@@ -25,13 +25,16 @@ async def generate_runner_response(sender: dict, message: str) -> dict:
 
     runner_data = sheets.get_runner(runner_id) or sender.get("data", {})
 
-    # Guard: don't respond as a coaching AI until a plan exists.
-    # Runners who just paid haven't had a plan created by the coach yet.
+    # Guard: if no plan exists yet, only answer general questions.
+    # Training-specific intents (feedback, missed session, workout detail) need a plan to make sense.
     all_plans = sheets.get_runner_plans(runner_id)
     if not all_plans:
-        response = _no_plan_response(runner_data)
-        sheets.log_conversation(runner_id, coach_id, message, response, "awaiting_plan")
-        return {"response": response, "intent": "awaiting_plan"}
+        intent = classify_intent(message)
+        if intent in ("feedback", "missed_session", "workout", "checkin"):
+            response = _no_plan_response(runner_data)
+            sheets.log_conversation(runner_id, coach_id, message, response, "awaiting_plan")
+            return {"response": response, "intent": "awaiting_plan"}
+        # General questions (injury advice, nutrition, gear, etc.) — answer them
 
     todays_plan = sheets.get_todays_plan(runner_id)
 

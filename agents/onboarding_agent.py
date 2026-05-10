@@ -49,19 +49,22 @@ async def handle_onboarding(phone: str, message: str) -> str:
     raw_response = await llm.complete(messages)
     clean_response = raw_response.replace("[COMPLETE]", "").strip()
     if not clean_response:
-        clean_response = f"Great, I think I have everything I need, {session['name'].split()[0]}! Let me get your plan set up 🏃"
+        first = session["name"].split()[0] if session["name"] not in ("New Runner", "", None) else ""
+        clean_response = f"Got everything I need{', ' + first if first else ''}. Let me get your plan set up."
     session["history"].append({"role": "assistant", "content": clean_response})
 
-    # Trigger completion if LLM signalled it OR if we can extract all 5 fields
-    user_turns = sum(1 for m in session["history"] if m["role"] == "user")
+    # Only complete when LLM signals [COMPLETE] — no fallback heuristic.
+    # The heuristic (user_turns >= 5) was firing too early and skipping questions.
     lm_complete = "[COMPLETE]" in raw_response
-    profile_complete = lm_complete or (user_turns >= 5 and await _is_profile_complete(session))
 
-    if profile_complete:
+    if lm_complete:
         try:
             await _complete_onboarding(phone, session)
         except Exception as e:
             logger.error(f"Failed to save onboarding for {phone}: {e}")
+        # Return empty — payment link is sent by _send_payment_link inside _complete_onboarding.
+        # Returning clean_response here would cause a second message to be sent by the caller.
+        return ""
 
     return clean_response
 
