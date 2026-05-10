@@ -195,10 +195,9 @@ async def create_subscription(name: str, phone: str, coach_id: str, runner_id: s
                 "https://api.razorpay.com/v1/subscriptions",
                 auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET),
                 json={
-                    "plan_id":        RAZORPAY_PLAN_ID,
-                    "total_count":    120,   # 10 years — effectively perpetual until cancelled
-                    "customer_notify": 0,   # we notify via WhatsApp
-                    "callback_url":   f"{APP_URL}/payment-success",
+                    "plan_id":         RAZORPAY_PLAN_ID,
+                    "total_count":     120,  # 10 years — effectively perpetual until cancelled
+                    "customer_notify": 0,    # we notify via WhatsApp
                     "notes": {
                         "name":            name,
                         "whatsapp_number": phone,
