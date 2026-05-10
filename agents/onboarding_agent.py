@@ -179,7 +179,9 @@ async def _send_payment_link(phone: str, runner_id: str, session: dict):
             name=name, phone=phone, coach_id=coach_id, runner_id=runner_id
         )
 
+        # Store link on runner so we can resend it if they type HELP
         if short_url:
+            sheets.update_runner(runner_id, {"payment_link": short_url})
             msg = (
                 f"Got everything I need, {first}. "
                 f"Last step — set up your subscription here:\n{short_url}"

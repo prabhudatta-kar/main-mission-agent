@@ -36,9 +36,7 @@ async def handle_incoming(data: dict):
             response = await _run_onboarding(normalized, sender, message)
             await whatsapp.send_text(runner_data["phone"], response)
         elif runner_data.get("payment_status", "Paid") == "Unpaid":
-            await whatsapp.send_text(runner_data["phone"],
-                "Your plan's ready to go — just need you to complete payment first. "
-                "Use the link we sent. Reply HELP if you need it again.")
+            await _handle_unpaid_runner(runner_data, message)
         else:
             await handle_runner_message(sender, message)
 
@@ -110,6 +108,32 @@ async def _run_onboarding(phone: str, sender: dict, message: str, name: str = No
             prefilled=prefilled,
         )
     return await handle_onboarding(phone, message)
+
+
+async def _handle_unpaid_runner(runner_data: dict, message: str):
+    phone = runner_data.get("phone", "")
+    link  = runner_data.get("payment_link", "")
+
+    if message.strip().upper() == "HELP":
+        if link:
+            await whatsapp.send_text(phone,
+                f"Here's your subscription link:\n{link}\n\nComplete payment there to get started.")
+        else:
+            await whatsapp.send_text(phone,
+                "Sorry, I can't find your link. Please contact us and we'll send it again.")
+        return
+
+    # For any other message, only remind once — don't repeat on every reply
+    recent = sheets.get_last_n_messages(runner_data.get("runner_id", ""), n=10)
+    already_reminded = any(
+        "complete payment" in (m.get("message") or "").lower()
+        or "subscription link" in (m.get("message") or "").lower()
+        for m in recent if m.get("direction") == "outbound"
+    )
+    if not already_reminded:
+        await whatsapp.send_text(phone,
+            "To get started, complete your subscription payment using the link we sent. "
+            "Type HELP if you need it resent.")
 
 
 def identify_sender(phone: str) -> dict:
