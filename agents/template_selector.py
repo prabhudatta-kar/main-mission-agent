@@ -75,9 +75,12 @@ def _extract_distance(message: str, plan) -> str:
 def _data_vars(runner: dict, plan, message: str) -> dict:
     """Variables that come directly from data — no LLM needed."""
     name = runner.get("name") or "there"
+    race_goal = runner.get("race_goal") or "your goal race"
+    race_dist = runner.get("race_distance") or ""
+    race_label = f"{race_goal} {race_dist}".strip() if race_dist else race_goal
     return {
         "first_name":    name.split()[0],
-        "race_goal":     runner.get("race_goal") or "your goal race",
+        "race_goal":     race_label,
         "weeks_to_race": str(weeks_until(runner.get("race_date") or "")),
         "distance":      _extract_distance(message, plan),
         "session_type":  (plan.get("session_type") or "run").lower() if plan else "run",

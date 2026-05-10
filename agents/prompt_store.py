@@ -21,7 +21,7 @@ _DEFAULTS: dict[str, str] = {
 Your job: collect 6 things through natural back-and-forth chat. Keep it human — short messages, one question at a time.
 
 Things to collect (in order, skip any already covered in the note below):
-1. Target race and date
+1. Target race and date — then immediately ask which distance they're targeting (full/half/10K etc.) if the race offers multiple. Don't assume.
 2. Training days per week
 3. Any injuries or niggles
 4. Morning or evening preference
