@@ -399,7 +399,7 @@ class FirebaseClient:
 
     # ── System Prompts (dynamic, editable from dashboard) ────────────────────
 
-    def get_system_prompt(self, prompt_id: str) -> dict | None:
+    def get_system_prompt(self, prompt_id: str):
         return _doc(self._col("system_prompts").document(prompt_id).get())
 
     def upsert_system_prompt(self, prompt_id: str, content: str,
