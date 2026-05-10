@@ -510,15 +510,17 @@ async def api_delete_rule(rule_id: str):
 
 
 class RunnerUpdateReq(BaseModel):
-    name:         str | None = None
-    phone:        str | None = None
-    race_goal:    str | None = None
-    race_date:    str | None = None
-    weekly_days:  str | None = None
-    fitness_level: str | None = None
-    injuries:     str | None = None
-    monthly_fee:  str | None = None
-    notes:        str | None = None
+    name:           str | None = None
+    phone:          str | None = None
+    race_goal:      str | None = None
+    race_date:      str | None = None
+    weekly_days:    str | None = None
+    fitness_level:  str | None = None
+    injuries:       str | None = None
+    monthly_fee:    str | None = None
+    payment_status: str | None = None
+    status:         str | None = None
+    notes:          str | None = None
 
 
 @router.put("/api/runner/{runner_id}")
@@ -1281,7 +1283,14 @@ async function openPanel(runnerId, focusCompose = false) {
     <div class="profile-row"><span class="lbl">Race date</span><span class="val">${r.race_date||'—'}</span></div>
     <div class="profile-row"><span class="lbl">Weeks to race</span><span class="val">${data.weeks}</span></div>
     <div class="profile-row"><span class="lbl">Started</span><span class="val">${r.start_date||'—'}</span></div>
-    <div class="profile-row"><span class="lbl">Payment</span><span class="val">${r.payment_status||'—'} · ₹${r.monthly_fee||'—'}/mo</span></div>
+    <div class="profile-row">
+      <span class="lbl">Payment</span>
+      <span class="val" style="display:flex;align-items:center;gap:8px">
+        <span style="color:${r.payment_status==='Paid'?'#16a34a':r.payment_status==='Unpaid'?'#dc2626':'#92400e'}">${r.payment_status||'—'}</span>
+        · ₹${r.monthly_fee||'—'}/mo
+        ${r.payment_status !== 'Paid' ? `<button style="font-size:11px;padding:2px 8px;background:#dcfce7;color:#16a34a;border:1px solid #86efac;border-radius:4px;cursor:pointer;font-weight:600" onclick="markAsPaid('${r.runner_id}')">Mark Paid</button>` : ''}
+      </span>
+    </div>
     <div class="profile-row"><span class="lbl">Race distance</span><span class="val">${r.race_distance||'—'}</span></div>
     ${(r.races && r.races.length > 1) ? `<div class="profile-row"><span class="lbl">All races</span><span class="val" style="text-align:right">${r.races.map(rc=>`${rc.name}${rc.distance?' '+rc.distance:''} ${rc.date?'('+rc.date+')':''}`).join('<br>')}</span></div>` : ''}
     <div class="profile-row"><span class="lbl">Injuries</span><span class="val">${inj}</span></div>
@@ -1410,6 +1419,19 @@ async function markComplete(runnerId, distance) {
 }
 
 // ── Runner edit / delete ──────────────────────────────────────────────────────
+
+async function markAsPaid(runnerId) {
+  if (!confirm('Mark this runner as Paid? This updates their payment status in Firebase.')) return;
+  try {
+    const res = await fetch(`/dashboard/api/runner/${runnerId}`, {
+      method: 'PUT', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({payment_status: 'Paid', status: 'Active'})
+    });
+    const d = await res.json();
+    if (d.ok) { toast('Marked as Paid ✓'); openPanel(runnerId); }
+    else toast(d.error || 'Failed', true);
+  } catch(e) { toast('Error: ' + e.message, true); }
+}
 
 function openEditRunner(runnerId) {
   const r = activeRunner;
