@@ -451,6 +451,40 @@ async def api_delete_rule(rule_id: str):
     return {"ok": True}
 
 
+class RunnerUpdateReq(BaseModel):
+    name:         str | None = None
+    phone:        str | None = None
+    race_goal:    str | None = None
+    race_date:    str | None = None
+    weekly_days:  str | None = None
+    fitness_level: str | None = None
+    injuries:     str | None = None
+    monthly_fee:  str | None = None
+    notes:        str | None = None
+
+
+@router.put("/api/runner/{runner_id}")
+async def api_update_runner(runner_id: str, req: RunnerUpdateReq):
+    fields = {k: v for k, v in req.dict().items() if v is not None}
+    if not fields:
+        return JSONResponse({"error": "Nothing to update"}, status_code=400)
+    sheets.update_runner(runner_id, fields)
+    return {"ok": True}
+
+
+@router.delete("/api/runner/{runner_id}")
+async def api_delete_runner(runner_id: str):
+    """Hard delete — removes runner, all plans, conversations."""
+    sheets._col("runners").document(runner_id).delete()
+    # Remove plans and conversations (best-effort)
+    for doc in sheets._col("training_plans").where("runner_id", "==", runner_id).stream():
+        doc.reference.delete()
+    for doc in sheets._col("conversations").where("runner_id", "==", runner_id).stream():
+        doc.reference.delete()
+    sheets.log_platform_event("runner_deleted", runner_id, "", f"Runner {runner_id} deleted from dashboard")
+    return {"ok": True}
+
+
 # ── HTML page ─────────────────────────────────────────────────────────────────
 
 @router.get("/", response_class=HTMLResponse)
@@ -592,6 +626,20 @@ td small{display:block;font-size:11px;color:#999;margin-top:2px}
 .profile-row{display:flex;justify-content:space-between;margin-bottom:10px;font-size:13px}
 .profile-row .lbl{color:#666}
 .profile-row .val{font-weight:600;text-align:right;max-width:60%}
+.prof-edit-btn{flex:1;background:#f0f4ff;color:#3730a3;border:1px solid #c7d2fe;border-radius:8px;padding:8px;font-size:12px;font-weight:600;cursor:pointer}
+.prof-edit-btn:hover{background:#e0e7ff}
+.prof-del-btn{flex:1;background:#fff0f0;color:#dc2626;border:1px solid #fca5a5;border-radius:8px;padding:8px;font-size:12px;font-weight:600;cursor:pointer}
+.prof-del-btn:hover{background:#fee2e2}
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:1000;padding:16px}
+.modal{background:#fff;border-radius:14px;padding:24px;width:100%;max-width:420px;max-height:90vh;overflow-y:auto}
+.modal h3{font-size:16px;font-weight:700;margin-bottom:16px}
+.modal label{display:block;font-size:12px;font-weight:600;color:#666;margin-bottom:4px;text-transform:uppercase;letter-spacing:.04em}
+.modal input,.modal textarea{width:100%;border:1px solid #e5e7eb;border-radius:8px;padding:9px 12px;font-size:13px;margin-bottom:14px;outline:none;font-family:inherit}
+.modal input:focus,.modal textarea:focus{border-color:#6366f1}
+.modal-actions{display:flex;gap:8px;margin-top:4px}
+.modal-save{flex:1;background:#6366f1;color:#fff;border:none;border-radius:8px;padding:10px;font-size:13px;font-weight:700;cursor:pointer}
+.modal-save:hover{background:#4f46e5}
+.modal-cancel{flex:1;background:#f3f4f6;color:#374151;border:none;border-radius:8px;padding:10px;font-size:13px;font-weight:600;cursor:pointer}
 .injury-tag{background:#fee2e2;color:#991b1b;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600}
 .plan-card{background:#f8fffe;border:1px solid #d1fae5;border-radius:10px;padding:12px 14px;margin-bottom:12px;font-size:13px}
 .plan-card .plan-title{font-weight:700;font-size:14px;margin-bottom:6px}
@@ -826,6 +874,32 @@ td small{display:block;font-size:11px;color:#999;margin-top:2px}
 </div>
 
 <div class="toast" id="toast"></div>
+
+<!-- Edit Runner Modal -->
+<div class="modal-overlay" id="edit-runner-overlay" style="display:none" onclick="if(event.target===this)closeEditRunner()">
+  <div class="modal">
+    <h3>Edit runner</h3>
+    <input type="hidden" id="er-runner-id">
+    <label>Name</label><input id="er-name" type="text" placeholder="Full name">
+    <label>Race goal</label><input id="er-race" type="text" placeholder="e.g. Bangalore Marathon">
+    <label>Race date</label><input id="er-date" type="date">
+    <label>Training days / week</label><input id="er-days" type="number" min="1" max="7" placeholder="e.g. 4">
+    <label>Fitness level</label>
+    <select id="er-fitness" style="width:100%;border:1px solid #e5e7eb;border-radius:8px;padding:9px 12px;font-size:13px;margin-bottom:14px">
+      <option value="">— select —</option>
+      <option value="Beginner">Beginner (under 20 km/wk)</option>
+      <option value="Intermediate">Intermediate (20–50 km/wk)</option>
+      <option value="Advanced">Advanced (50+ km/wk)</option>
+    </select>
+    <label>Injuries / niggles</label><input id="er-injuries" type="text" placeholder="e.g. Left knee niggle">
+    <label>Monthly fee (₹)</label><input id="er-fee" type="number" placeholder="e.g. 2500">
+    <label>Notes</label><textarea id="er-notes" rows="2" placeholder="Any internal notes"></textarea>
+    <div class="modal-actions">
+      <button class="modal-cancel" onclick="closeEditRunner()">Cancel</button>
+      <button class="modal-save" id="er-save-btn" onclick="saveEditRunner()">Save changes</button>
+    </div>
+  </div>
+</div>
 
 <!-- Manage AI Modal -->
 <div class="mai-overlay" id="mai-overlay" style="display:none" onclick="if(event.target===this)closeManageAI()">
@@ -1151,6 +1225,10 @@ async function openPanel(runnerId, focusCompose = false) {
     <div class="profile-row"><span class="lbl">Payment</span><span class="val">${r.payment_status||'—'} · ₹${r.monthly_fee||'—'}/mo</span></div>
     <div class="profile-row"><span class="lbl">Injuries</span><span class="val">${inj}</span></div>
     ${r.notes ? `<div style="background:#f9f9f9;border-radius:8px;padding:10px 12px;font-size:12px;color:#555;margin-top:8px;line-height:1.5">${r.notes}</div>` : ''}
+    <div style="display:flex;gap:8px;margin-top:16px">
+      <button class="prof-edit-btn" onclick="openEditRunner('${r.runner_id}')">✏ Edit</button>
+      <button class="prof-del-btn" onclick="deleteRunner('${r.runner_id}','${r.name}')">🗑 Delete runner</button>
+    </div>
   `;
 
   // Coach notes
@@ -1266,6 +1344,71 @@ async function markComplete(runnerId, distance) {
     toast('Marked as completed ✓');
     await loadData();
     if (activeRunner?.runner_id === runnerId) openPanel(runnerId);
+  } catch(e) { toast('Error: ' + e.message, true); }
+}
+
+// ── Runner edit / delete ──────────────────────────────────────────────────────
+
+function openEditRunner(runnerId) {
+  const r = activeRunner;
+  if (!r) return;
+  document.getElementById('er-runner-id').value = runnerId;
+  document.getElementById('er-name').value      = r.name || '';
+  document.getElementById('er-race').value      = r.race_goal || '';
+  document.getElementById('er-date').value      = r.race_date || '';
+  document.getElementById('er-days').value      = r.weekly_days || '';
+  document.getElementById('er-fitness').value   = r.fitness_level || '';
+  document.getElementById('er-injuries').value  = r.injuries || '';
+  document.getElementById('er-fee').value       = r.monthly_fee || '';
+  document.getElementById('er-notes').value     = r.notes || '';
+  document.getElementById('edit-runner-overlay').style.display = 'flex';
+}
+
+function closeEditRunner() {
+  document.getElementById('edit-runner-overlay').style.display = 'none';
+}
+
+async function saveEditRunner() {
+  const runnerId = document.getElementById('er-runner-id').value;
+  const btn = document.getElementById('er-save-btn');
+  const payload = {
+    name:          document.getElementById('er-name').value.trim() || null,
+    race_goal:     document.getElementById('er-race').value.trim() || null,
+    race_date:     document.getElementById('er-date').value || null,
+    weekly_days:   document.getElementById('er-days').value || null,
+    fitness_level: document.getElementById('er-fitness').value || null,
+    injuries:      document.getElementById('er-injuries').value.trim() || null,
+    monthly_fee:   document.getElementById('er-fee').value || null,
+    notes:         document.getElementById('er-notes').value.trim() || null,
+  };
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    const res = await fetch(`/dashboard/api/runner/${runnerId}`, {
+      method: 'PUT', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const d = await res.json();
+    if (d.ok) {
+      toast('Runner updated ✓');
+      closeEditRunner();
+      openPanel(runnerId);
+    } else { toast(d.error || 'Failed to save', true); }
+  } catch(e) { toast('Error: ' + e.message, true); }
+  finally { btn.disabled = false; btn.textContent = 'Save changes'; }
+}
+
+async function deleteRunner(runnerId, name) {
+  if (!confirm(`Delete ${name}? This removes the runner, all their plans, and conversation history. This cannot be undone.`)) return;
+  // Second confirmation for safety
+  if (!confirm(`Are you sure? All data for ${name} will be permanently deleted.`)) return;
+  try {
+    const res = await fetch(`/dashboard/api/runner/${runnerId}`, {method: 'DELETE'});
+    const d = await res.json();
+    if (d.ok) {
+      toast(`${name} deleted`);
+      closePanel();
+      loadData();
+    } else { toast(d.error || 'Failed to delete', true); }
   } catch(e) { toast('Error: ' + e.message, true); }
 }
 
