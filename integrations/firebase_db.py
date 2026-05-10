@@ -445,6 +445,20 @@ class FirebaseClient:
     def get_all_system_prompts(self) -> list:
         return self._stream(self._col("system_prompts"))
 
+    # ── Onboarding Sessions (persistent across restarts) ─────────────────────
+
+    def get_onboarding_session(self, phone: str) -> dict:
+        return _doc(self._col("onboarding_sessions").document(phone).get())
+
+    def save_onboarding_session(self, phone: str, session: dict):
+        self._col("onboarding_sessions").document(phone).set({
+            **{k: v for k, v in session.items() if k != "_id"},
+            "updated_at": _now_ist(),
+        })
+
+    def delete_onboarding_session(self, phone: str):
+        self._col("onboarding_sessions").document(phone).delete()
+
     # ── Runner Memory (compact daily summary) ────────────────────────────────
 
     def get_runner_memory(self, runner_id: str) -> dict:

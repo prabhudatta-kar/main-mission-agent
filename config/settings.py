@@ -26,6 +26,7 @@ WEBHOOK_SECRET_TOKEN    = os.getenv("WEBHOOK_SECRET_TOKEN", "")
 WHATSAPP_BUSINESS_PHONE = os.getenv("WHATSAPP_BUSINESS_PHONE", "919019585359")  # for wa.me links
 PAYMENT_LINK            = os.getenv("PAYMENT_LINK", "")
 APP_URL                 = os.getenv("APP_URL", "https://web-production-a1ef8.up.railway.app")
+SUPPORT_EMAIL           = os.getenv("SUPPORT_EMAIL", "indiranagarrunclub@gmail.com")
 
 APP_ENV = os.getenv("APP_ENV", "development")
 TIMEZONE = os.getenv("TIMEZONE", "Asia/Kolkata")

@@ -1,6 +1,6 @@
 import logging
 
-from config.settings import DEFAULT_COACH_ID
+from config.settings import DEFAULT_COACH_ID, SUPPORT_EMAIL
 from integrations.firebase_db import sheets
 from integrations.whatsapp import whatsapp
 from agents.coach_agent import handle_runner_message, handle_coach_message, generate_runner_response
@@ -135,7 +135,7 @@ async def _handle_unpaid_runner(runner_data: dict, message: str):
         if link:
             reply = f"Here's your payment link:\n{link}"
         else:
-            reply = "Having trouble generating your link right now. Please message us on Instagram @mainmission.run and we'll sort it out."
+            reply = f"Having trouble generating your link right now. Email us at {SUPPORT_EMAIL} and we'll sort it out."
 
         await whatsapp.send_text(phone, reply)
         sheets.log_conversation(runner_id, runner_data.get("coach_id", ""), message, reply, "payment_help")

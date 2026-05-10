@@ -9,12 +9,12 @@ from integrations.whatsapp import whatsapp
 
 logger = logging.getLogger(__name__)
 
-# {phone: {history, coach_id, name, runner_id, prefilled}}
-_sessions: dict = {}
+# Sessions are stored in Firestore `onboarding_sessions` collection —
+# survives restarts and works across multiple instances.
 
 
 def is_onboarding(phone: str) -> bool:
-    return phone in _sessions
+    return sheets.get_onboarding_session(phone) is not None
 
 
 def start_onboarding(phone: str, coach_id: str, name: str = "New Runner",
@@ -22,7 +22,6 @@ def start_onboarding(phone: str, coach_id: str, name: str = "New Runner",
     prefilled = prefilled or {}
     notes = []
 
-    # Tell the LLM explicitly when name is unknown so it asks first
     if not name or name in ("New Runner", ""):
         notes.append("Runner's name is NOT known — ask for their name as the very first question.")
 
@@ -37,99 +36,94 @@ def start_onboarding(phone: str, coach_id: str, name: str = "New Runner",
         year=date.today().year,
         prefilled_note=prefilled_note,
     )
-    _sessions[phone] = {
-        "history": [],
-        "coach_id": coach_id,
-        "name": name,
+
+    sheets.save_onboarding_session(phone, {
+        "phone":     phone,
+        "history":   [],
+        "coach_id":  coach_id,
+        "name":      name,
         "runner_id": runner_id,
         "prefilled": prefilled,
-        "system": system_prompt,
-    }
+        "system":    system_prompt,
+    })
     logger.info(f"Onboarding started for {phone} (coach={coach_id})")
 
 
 async def handle_onboarding(phone: str, message: str) -> str:
-    session = _sessions[phone]
-    session["history"].append({"role": "user", "content": message})
+    session = sheets.get_onboarding_session(phone)
+    if not session:
+        logger.error(f"No onboarding session found for {phone}")
+        return "Something went wrong — please message us again to restart."
 
-    messages = [{"role": "system", "content": session["system"]}] + session["history"]
+    history = session.get("history", [])
+    history.append({"role": "user", "content": message})
+
+    messages = [{"role": "system", "content": session["system"]}] + history
     raw_response = await llm.complete(messages)
     clean_response = raw_response.replace("[COMPLETE]", "").strip()
-    if not clean_response:
-        first = session["name"].split()[0] if session["name"] not in ("New Runner", "", None) else ""
-        clean_response = f"Got everything I need{', ' + first if first else ''}. Let me get your plan set up."
-    session["history"].append({"role": "assistant", "content": clean_response})
 
-    # Only complete when LLM signals [COMPLETE] — no fallback heuristic.
-    # The heuristic (user_turns >= 5) was firing too early and skipping questions.
+    if not clean_response:
+        sname = session.get("name", "")
+        first = sname.split()[0] if sname not in ("New Runner", "", None) else ""
+        clean_response = f"Got everything I need{', ' + first if first else ''}. Let me get your plan set up."
+
+    history.append({"role": "assistant", "content": clean_response})
     lm_complete = "[COMPLETE]" in raw_response
 
     if lm_complete:
+        # Persist final history before completing (in case _complete_onboarding errors)
+        session["history"] = history
         try:
             await _complete_onboarding(phone, session)
         except Exception as e:
             logger.error(f"Failed to save onboarding for {phone}: {e}")
-        # Return empty — payment link is sent by _send_payment_link inside _complete_onboarding.
-        # Returning clean_response here would cause a second message to be sent by the caller.
         return ""
 
+    # Save updated history back to Firestore
+    session["history"] = history
+    sheets.save_onboarding_session(phone, session)
     return clean_response
 
 
 async def _complete_onboarding(phone: str, session: dict) -> None:
-    parsed = await _extract_profile(session["history"], session["prefilled"])
-
-    runner_data = {
-        "name": session["name"],
-        "phone": phone,
-        "coach_id": session["coach_id"],
-        "race_goal": parsed.get("race_goal", ""),
-        "race_date": parsed.get("race_date", ""),
-        "weekly_days": parsed.get("weekly_days", ""),
-        "injuries": parsed.get("injuries", "None"),
-        "fitness_level": parsed.get("fitness_level", "Intermediate"),
-        "start_date": date.today().isoformat(),
-        "status": "Active",
-        "payment_status": "Trial",
-        "onboarded": True,
-    }
+    parsed = await _extract_profile(session["history"], session.get("prefilled", {}))
 
     existing_runner_id = session.get("runner_id")
     if existing_runner_id:
         update_fields = {
-            "race_goal":    runner_data["race_goal"],
-            "race_date":    runner_data["race_date"],
-            "weekly_days":  runner_data["weekly_days"],
-            "injuries":     runner_data["injuries"],
-            "fitness_level": runner_data["fitness_level"],
+            "race_goal":    parsed.get("race_goal", ""),
+            "race_date":    parsed.get("race_date", ""),
+            "weekly_days":  parsed.get("weekly_days", ""),
+            "injuries":     parsed.get("injuries", "None"),
+            "fitness_level": parsed.get("fitness_level", "Intermediate"),
             "onboarded":    "TRUE",
         }
-        # If name was a placeholder (e.g. "New Runner"), update with the real name
         if parsed.get("name") and session.get("name") in ("New Runner", "", None):
             update_fields["name"] = parsed["name"]
         sheets.update_runner(existing_runner_id, update_fields)
         runner_id = existing_runner_id
     else:
-        runner_id = sheets.create_runner(runner_data)
+        runner_id = sheets.create_runner({
+            "name":         session.get("name", ""),
+            "phone":        phone,
+            "coach_id":     session.get("coach_id", ""),
+            "race_goal":    parsed.get("race_goal", ""),
+            "race_date":    parsed.get("race_date", ""),
+            "weekly_days":  parsed.get("weekly_days", ""),
+            "injuries":     parsed.get("injuries", "None"),
+            "fitness_level": parsed.get("fitness_level", "Intermediate"),
+            "start_date":   date.today().isoformat(),
+            "status":       "Active",
+            "payment_status": "Trial",
+            "onboarded":    True,
+        })
 
-    sheets.log_platform_event("onboarding", runner_id, session["coach_id"],
-                              f"Onboarding completed for {session['name']}")
-    del _sessions[phone]
-    logger.info(f"Onboarding completed and saved for {phone} → runner {runner_id}")
+    sheets.log_platform_event("onboarding", runner_id, session.get("coach_id", ""),
+                              f"Onboarding completed for {session.get('name')}")
+    sheets.delete_onboarding_session(phone)
+    logger.info(f"Onboarding completed for {phone} → runner {runner_id}")
 
-    # Send payment link to complete enrollment
     await _send_payment_link(phone, runner_id, session)
-
-
-async def _is_profile_complete(session: dict) -> bool:
-    """Return True if all 5 onboarding fields can be extracted from the conversation."""
-    parsed = await _extract_profile(session["history"], session["prefilled"])
-    return bool(
-        parsed.get("race_goal") and
-        parsed.get("weekly_days") and
-        parsed.get("injuries") is not None and
-        parsed.get("fitness_level")
-    )
 
 
 async def _extract_profile(history: list, prefilled: dict) -> dict:
@@ -138,7 +132,6 @@ async def _extract_profile(history: list, prefilled: dict) -> dict:
         f"{'Runner' if m['role'] == 'user' else 'Agent'}: {m['content']}"
         for m in history
     )
-
     prompt = f"""Extract the runner's profile from this onboarding conversation. Today is {today.isoformat()} (year {today.year}).
 
 {history_text}
@@ -158,42 +151,40 @@ Return this exact JSON, no markdown:
     try:
         raw = await llm.complete([
             {"role": "system", "content": "Extract structured runner data from a conversation. Return only valid JSON."},
-            {"role": "user", "content": prompt},
+            {"role": "user",   "content": prompt},
         ])
         raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         return json.loads(raw)
     except Exception as e:
         logger.warning(f"Profile extraction failed: {e}")
-        return {"race_goal": "", "race_date": "", "weekly_days": "", "injuries": "None", "fitness_level": "Intermediate"}
+        return {"name": "", "race_goal": "", "race_date": "", "weekly_days": "", "injuries": "None", "fitness_level": "Intermediate"}
 
 
 async def _send_payment_link(phone: str, runner_id: str, session: dict):
-    """Create a Razorpay subscription and send the payment link via WhatsApp."""
     try:
         from integrations.razorpay import create_subscription
         name     = session.get("name", "Runner")
         coach_id = session.get("coach_id", "")
-        first    = name.split()[0]
+        first    = name.split()[0] if name not in ("New Runner", "", None) else ""
 
         short_url = await create_subscription(
             name=name, phone=phone, coach_id=coach_id, runner_id=runner_id
         )
 
-        # Store link on runner so we can resend it if they type HELP
         if short_url:
             sheets.update_runner(runner_id, {"payment_link": short_url})
             msg = (
-                f"Got everything I need, {first}. "
+                f"Got everything I need{', ' + first if first else ''}. "
                 f"Last step — set up your subscription here:\n{short_url}"
             )
         else:
             msg = (
-                f"Got everything I need, {first}. "
+                f"Got everything I need{', ' + first if first else ''}. "
                 f"Your coach will be in touch within 24 hours to get things started."
             )
 
         await whatsapp.send_text(phone, msg)
-        logger.info(f"Payment link sent to {phone}: {short_url or '(no link — plan ID not configured)'}")
+        logger.info(f"Payment link sent to {phone}: {short_url or '(Razorpay not configured)'}")
 
     except Exception as e:
         logger.error(f"Failed to send payment link to {phone}: {e}")
