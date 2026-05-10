@@ -1164,6 +1164,7 @@ async function openPanel(runnerId, focusCompose = false) {
   if (data.error) { toast(data.error, true); return; }
 
   const r  = data.runner;
+  activeRunner = r;   // store full runner data so edit modal can prefill
   const p  = data.plan;
   const color = avatarColor(r.name);
 
