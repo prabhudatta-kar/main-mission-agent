@@ -208,7 +208,9 @@ async def create_subscription(name: str, phone: str, coach_id: str, runner_id: s
                 },
                 timeout=15,
             )
-            resp.raise_for_status()
+            if resp.status_code != 200:
+                logger.error(f"Razorpay subscription error for {phone}: {resp.status_code} — {resp.text}")
+                return ""
             short_url = resp.json().get("short_url", "")
             logger.info(f"Created Razorpay subscription for {phone}: {short_url}")
             return short_url
