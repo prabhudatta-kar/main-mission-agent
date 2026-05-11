@@ -115,7 +115,7 @@ async def _generate_llm_response(runner: dict, plan, history: list,
     coach_id  = runner.get("coach_id", "")
 
     # ── System prompt: tone → KB → coach rules ─────────────────────────────────
-    base_system  = get_prompt("creative_vars_system") or "You are an expert running coach assistant."
+    base_system  = get_prompt("coach_response_system") or get_prompt("creative_vars_system")
     coaching_kb  = get_coaching_context(intent, message)
     coach_rules  = sheets.get_active_rules(coach_id)
     rules_text   = "\n".join(
@@ -128,12 +128,6 @@ async def _generate_llm_response(runner: dict, plan, history: list,
     if rules_text:
         system_msg += f"\n\nCOACH'S RULES — override everything above:\n{rules_text}"
 
-    system_msg += (
-        "\n\nNAME USAGE: Do not address the runner by name in most messages. "
-        "A real coach texting someone uses their name at most once every 4-5 exchanges, "
-        "and often not at all. Never open with the runner's name. Use it only when it "
-        "feels genuinely natural — e.g. after a long pause or for emphasis."
-    )
 
     # ── Runner context ─────────────────────────────────────────────────────────
     try:
