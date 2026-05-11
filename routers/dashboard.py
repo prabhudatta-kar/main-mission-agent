@@ -1143,6 +1143,7 @@ let allRunners = [];
 let coaches    = [];
 let activeFilter = 'all';
 let activeRunner = null;
+let _plansCache  = {};   // planId → full plan object for edit form pre-fill
 
 // ── Load all data ─────────────────────────────────────────────────────────────
 
@@ -1855,6 +1856,7 @@ function renderPlanList(plans, runnerId) {
     html += `<div class="week-header">Week of ${wDate.toLocaleDateString('en-IN',{day:'numeric',month:'short'})}</div>`;
     weeks[wk].forEach(p => {
       const pid = p.plan_id || p._id;
+      _plansCache[pid] = p;   // cache for edit form pre-fill
       const d   = new Date(p.date);
       const dayStr = d.toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short'});
       const sc  = sessionClass(p.session_type);
@@ -1956,43 +1958,58 @@ async function saveNewPlan(runnerId) {
 }
 
 function showEditForm(planId, runnerId) {
-  // Find existing data from DOM
-  const card = document.getElementById(`sc-${planId}`);
   const existing = document.getElementById(`ef-${planId}`);
   if (existing.innerHTML) { existing.innerHTML = ''; return; }
 
+  const p = _plansCache[planId] || {};
+  const sessionTypes = ['Easy Run','Tempo Run','Interval Training','Fartlek','Long Run','Recovery Run','Cross Training','Rest'];
+  const intensities  = ['Zone 2','Threshold','VO2 Max','Easy','Rest'];
+  const isInterval   = INTERVAL_TYPES.has(p.session_type || '');
+  const isTimeBased  = p.duration_min && p.duration_min !== '0' && (!p.distance_km || p.distance_km === '0');
+
+  const typeOpts = sessionTypes.map(t =>
+    `<option${t === p.session_type ? ' selected' : ''}>${t}</option>`).join('');
+  const intOpts  = intensities.map(i =>
+    `<option${i === p.intensity ? ' selected' : ''}>${i}</option>`).join('');
+
   existing.innerHTML = `<div class="edit-form" style="margin-top:8px">
     <div class="ef-row">
-      <div><label>Session type</label><select id="eft-type-${planId}" onchange="onSessionTypeChange('eft-${planId}')">
-        <option>Easy Run</option><option>Tempo Run</option><option>Interval Training</option>
-        <option>Fartlek</option><option>Long Run</option><option>Recovery Run</option>
-        <option>Cross Training</option><option>Rest</option>
-      </select></div>
+      <div><label>Session type</label>
+        <select id="eft-type-${planId}" onchange="onSessionTypeChange('eft-${planId}')">${typeOpts}</select>
+      </div>
       <div>
         <label>
-          <span id="eft-dist-lbl-${planId}">Distance (km)</span>
+          <span id="eft-dist-lbl-${planId}">${isTimeBased ? 'Duration (mins)' : 'Distance (km)'}</span>
           <span style="margin-left:8px;font-size:11px;color:#6366f1;cursor:pointer" onclick="toggleTimeBased('eft-${planId}')">
-            switch to <span id="eft-mode-hint-${planId}">time</span>
+            switch to <span id="eft-mode-hint-${planId}">${isTimeBased ? 'distance' : 'time'}</span>
           </span>
         </label>
-        <input id="eft-dist-${planId}" type="number" step="0.5" placeholder="0" style="display:block">
-        <input id="eft-dur-${planId}"  type="number" step="5"   placeholder="mins" style="display:none">
+        <input id="eft-dist-${planId}" type="number" step="0.5" placeholder="0"
+               value="${p.distance_km||''}" style="display:${isTimeBased?'none':'block'}">
+        <input id="eft-dur-${planId}"  type="number" step="5" placeholder="mins"
+               value="${p.duration_min||''}" style="display:${isTimeBased?'block':'none'}">
       </div>
     </div>
-    <div class="ef-row" id="eft-interval-row-${planId}" style="display:none">
-      <div><label>Reps</label><input id="eft-reps-${planId}" type="number" placeholder="e.g. 8" min="1"></div>
-      <div><label>Metres per rep</label><input id="eft-repm-${planId}" type="number" placeholder="e.g. 400" step="50"></div>
+    <div class="ef-row" id="eft-interval-row-${planId}" style="display:${isInterval?'flex':'none'}">
+      <div><label>Reps</label>
+        <input id="eft-reps-${planId}" type="number" placeholder="e.g. 8" min="1" value="${p.reps||''}">
+      </div>
+      <div><label>Metres per rep</label>
+        <input id="eft-repm-${planId}" type="number" placeholder="e.g. 400" step="50" value="${p.rep_distance_m||''}">
+      </div>
     </div>
     <div class="ef-row">
-      <div><label>Intensity</label><select id="eft-int-${planId}">
-        <option>Zone 2</option><option>Threshold</option><option>VO2 Max</option><option>Easy</option><option>Rest</option>
-      </select></div>
-      <div><label>RPE target</label><input id="eft-rpe-${planId}" placeholder="4-5"></div>
+      <div><label>Intensity</label><select id="eft-int-${planId}">${intOpts}</select></div>
+      <div><label>RPE target</label>
+        <input id="eft-rpe-${planId}" placeholder="4-5" value="${p.rpe_target||''}">
+      </div>
     </div>
     <label>Coach notes <span style="color:#6366f1;font-size:10px;font-weight:400">(coaching cue)</span></label>
-    <textarea id="eft-notes-${planId}" rows="2" style="margin-bottom:6px" placeholder="e.g. Take it easy"></textarea>
+    <textarea id="eft-notes-${planId}" rows="2" style="margin-bottom:6px"
+              placeholder="e.g. Take it easy">${p.coach_notes||''}</textarea>
     <label>Workout notes <span style="color:#92400e;font-size:10px;font-weight:400">(general tips)</span></label>
-    <textarea id="eft-workout-notes-${planId}" rows="2" style="margin-bottom:6px" placeholder="e.g. Avoid heavy meals 2h before"></textarea>
+    <textarea id="eft-workout-notes-${planId}" rows="2" style="margin-bottom:6px"
+              placeholder="e.g. Avoid heavy meals 2h before">${p.workout_notes||''}</textarea>
     <div class="edit-form-actions">
       <button class="ef-save" onclick="savePlanEdit('${planId}','${runnerId}')">Save</button>
       <button class="ef-cancel" onclick="document.getElementById('ef-${planId}').innerHTML=''">Cancel</button>
