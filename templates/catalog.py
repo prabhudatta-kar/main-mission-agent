@@ -163,6 +163,46 @@ TEMPLATES: dict[str, dict] = {
         "wati_name": "mm_escalation_notified",
         "wati_body": "I've passed this on to your coach, {{1}}. They'll get back to you soon. In the meantime, take it easy 🙏",
     },
+
+    "plan_today_detail": {
+        "scenario": "Runner asks what today's or tomorrow's or a specific day's session is",
+        "body": "{first_name}, here's your {day_label} session:\n\n{session_summary}{notes_section}",
+        "variables": ["first_name", "day_label", "session_summary", "notes_section"],
+        "wati_name": "mm_plan_today_detail",
+        "wati_body": "{{1}}, here's your {{2}} session:\n\n{{3}}{{4}}",
+    },
+
+    "plan_week_view": {
+        "scenario": "Runner asks for their weekly training schedule",
+        "body": "{first_name}, your training this week:\n\n{week_plan}\n\n{weeks_to_race} weeks to {race_goal} 🏁",
+        "variables": ["first_name", "week_plan", "weeks_to_race", "race_goal"],
+        "wati_name": "mm_plan_week_view",
+        "wati_body": "{{1}}, your training this week:\n\n{{2}}\n\n{{3}} weeks to {{4}} 🏁",
+    },
+
+    "plan_no_session": {
+        "scenario": "Runner asks about a session but nothing is scheduled for that date",
+        "body": "{first_name}, I don't see a session scheduled for {day_label}. Your coach may not have set one yet — drop them a message if you need clarification.",
+        "variables": ["first_name", "day_label"],
+        "wati_name": "mm_plan_no_session",
+        "wati_body": "{{1}}, I don't see a session scheduled for {{2}}. Your coach may not have set one yet — drop them a message if you need clarification.",
+    },
+
+    "plan_tweak_flagged": {
+        "scenario": "Runner requests a modification to their scheduled session (distance, intensity, etc.)",
+        "body": "Got it, {first_name} — I've passed your request to your coach:\n\n\"{tweak_description}\"\n\nStick with the current plan until they update it.",
+        "variables": ["first_name", "tweak_description"],
+        "wati_name": "mm_plan_tweak_flagged",
+        "wati_body": "Got it, {{1}} — I've passed your request to your coach:\n\n\"{{2}}\"\n\nStick with the current plan until they update it.",
+    },
+
+    "plan_reschedule_flagged": {
+        "scenario": "Runner asks to reschedule or move a training session to a different day",
+        "body": "Got it, {first_name} — I've passed your reschedule request to your coach:\n\n\"{reschedule_description}\"\n\nThey'll confirm the change shortly.",
+        "variables": ["first_name", "reschedule_description"],
+        "wati_name": "mm_plan_reschedule_flagged",
+        "wati_body": "Got it, {{1}} — I've passed your reschedule request to your coach:\n\n\"{{2}}\"\n\nThey'll confirm the change shortly.",
+    },
 }
 
 

@@ -8,6 +8,7 @@ This guarantees responses are always anchored to an approved template body.
 import json
 import logging
 import re
+from datetime import date, timedelta
 
 from agents.coaching_kb import get_coaching_context
 from agents.prompt_store import get_prompt
@@ -149,14 +150,49 @@ async def _fill_creative_vars(
 
     descriptions = {v: _CREATIVE_DESCRIPTIONS.get(v, "short relevant value") for v in needed_vars}
 
-    # Build plan summary line
-    if plan:
-        plan_summary = (
-            f"{plan.get('session_type','Run')} — {plan.get('distance_km','')}km "
-            f"at {plan.get('intensity','easy')} intensity"
-        )
+    # Build plan summary — rich enough that LLM follow-ups don't hallucinate
+    if plan and str(plan.get("day_type", "")).lower() != "rest":
+        reps     = plan.get("reps", "")
+        rep_dist = plan.get("rep_distance_m", "")
+        dist     = plan.get("distance_km", "")
+        duration = plan.get("duration_min", "")
+        if reps and rep_dist:
+            metric = f"{reps} × {rep_dist}m"
+        elif dist and str(dist) not in ("0", ""):
+            metric = f"{dist}km"
+        elif duration and str(duration) not in ("0", ""):
+            metric = f"{duration}min"
+        else:
+            metric = ""
+        plan_parts = [
+            f"Session type: {plan.get('session_type','Run')}",
+            f"Distance/Volume: {metric or 'not specified'}",
+            f"Intensity: {plan.get('intensity','easy')}",
+            f"RPE target: {plan.get('rpe_target','') or 'not specified'}",
+        ]
+        if plan.get("coach_notes"):
+            plan_parts.append(f"Coach notes: {plan['coach_notes']}")
+        if plan.get("workout_notes"):
+            plan_parts.append(f"Workout notes: {plan['workout_notes']}")
+        plan_summary = "\n".join(plan_parts)
     else:
-        plan_summary = "Rest day / no session today"
+        # No plan today — look for next upcoming session so LLM doesn't invent one
+        runner_id = runner.get("runner_id", "")
+        upcoming = []
+        if runner_id:
+            tomorrow = (date.today() + timedelta(days=1)).isoformat()
+            week_end  = (date.today() + timedelta(days=14)).isoformat()
+            upcoming  = sheets.get_runner_plans(runner_id, from_date=tomorrow, to_date=week_end)
+            upcoming  = [p for p in upcoming if str(p.get("day_type", "")).lower() != "rest"]
+        if upcoming:
+            nxt = upcoming[0]
+            plan_summary = (
+                f"Today is a rest day. Next session: {nxt.get('date','')} — "
+                f"{nxt.get('session_type','Run')} {nxt.get('distance_km','')}km "
+                f"at {nxt.get('intensity','easy')}"
+            )
+        else:
+            plan_summary = "Rest day today / no upcoming sessions found in the next 2 weeks."
 
     user_prompt = (
         get_prompt("creative_vars_user")
@@ -175,7 +211,7 @@ async def _fill_creative_vars(
 
     # Build system message: base tone rules → KB context → coach rules (highest priority)
     coaching_ctx = get_coaching_context(intent, message)
-    system_msg   = get_prompt("creative_vars_system")
+    system_msg   = get_prompt("creative_vars_system") + "\nReturn only valid JSON. No markdown."
 
     if coaching_ctx:
         system_msg = f"{system_msg}\n\n{coaching_ctx}"
@@ -204,6 +240,233 @@ async def _fill_creative_vars(
         return {v: "" for v in needed_vars}
 
 
+# ── Plan intent handlers (no LLM for query; minimal LLM for change requests) ──
+
+def _parse_plan_date(message: str):
+    """Return (date_str, label). date_str is None for week-view requests."""
+    msg = message.lower()
+    today = date.today()
+
+    if any(k in msg for k in ("this week", "training this week", "sessions this week",
+                               "week's plan", "week's training", "weekly")):
+        return None, "this week"
+
+    if "tomorrow" in msg:
+        d = today + timedelta(days=1)
+        return d.isoformat(), "tomorrow"
+
+    day_map = {"monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+               "friday": 4, "saturday": 5, "sunday": 6}
+    for day_name, weekday in day_map.items():
+        if day_name in msg:
+            days_ahead = weekday - today.weekday()
+            if days_ahead <= 0:
+                days_ahead += 7
+            return (today + timedelta(days=days_ahead)).isoformat(), day_name.capitalize()
+
+    return today.isoformat(), "today"
+
+
+def _format_session(plan: dict) -> str:
+    """Build a compact one-line session descriptor from plan data."""
+    sess      = plan.get("session_type", "Run")
+    dist      = plan.get("distance_km", "")
+    intensity = plan.get("intensity", "")
+    rpe       = plan.get("rpe_target", "")
+    reps      = plan.get("reps", "")
+    rep_dist  = plan.get("rep_distance_m", "")
+    duration  = plan.get("duration_min", "")
+
+    if reps and rep_dist:
+        metric = f"{reps} × {rep_dist}m"
+    elif dist and str(dist) not in ("0", ""):
+        metric = f"{dist}km"
+    elif duration and str(duration) not in ("0", ""):
+        metric = f"{duration}min"
+    else:
+        metric = ""
+
+    parts = [sess]
+    if metric:
+        parts.append(metric)
+    if intensity:
+        parts.append(f"at {intensity}")
+    if rpe:
+        parts.append(f"(RPE {rpe})")
+    return " · ".join(parts)
+
+
+def _is_next_session_query(message: str) -> bool:
+    msg = message.lower()
+    return any(p in msg for p in ("next workout", "next run", "next session", "next training",
+                                   "when is my next", "upcoming session", "upcoming run",
+                                   "upcoming workout"))
+
+
+async def _handle_plan_query(runner: dict, today_plan, message: str) -> str:
+    first      = (runner.get("name") or "there").split()[0]
+    runner_id  = runner.get("runner_id", "")
+
+    # "when is my next run?" — find next non-rest session from today/tomorrow
+    if _is_next_session_query(message):
+        start = date.today().isoformat()
+        end   = (date.today() + timedelta(days=21)).isoformat()
+        plans = sheets.get_runner_plans(runner_id, from_date=start, to_date=end)
+        upcoming = [p for p in plans if str(p.get("day_type", "")).lower() != "rest"]
+        if not upcoming:
+            return fill_template("plan_no_session", {"first_name": first, "day_label": "the next 3 weeks"})
+        plan  = upcoming[0]
+        try:
+            label = date.fromisoformat(plan["date"]).strftime("%A, %d %b")
+        except Exception:
+            label = plan["date"]
+        session_summary = _format_session(plan)
+        coach_notes  = plan.get("coach_notes", "")
+        workout_notes = plan.get("workout_notes", "")
+        notes        = "\n".join(filter(None, [coach_notes, workout_notes]))
+        return fill_template("plan_today_detail", {
+            "first_name":      first,
+            "day_label":       label,
+            "session_summary": session_summary,
+            "notes_section":   f"\n\n{notes}" if notes else "",
+        })
+
+    # Detail follow-ups ("give me details", "what distance", etc.) — look at today's or tomorrow's plan
+    msg_lower = message.lower()
+    if any(p in msg_lower for p in ("give me details", "more details", "tell me more about",
+                                     "what distance", "how far", "as per plan", "planned distance",
+                                     "how many km", "what's the distance", "what is the distance")):
+        # Check today first, then tomorrow
+        plan = today_plan
+        if not plan or str(plan.get("day_type", "")).lower() == "rest":
+            plan = sheets.get_plan_by_date(runner_id, (date.today() + timedelta(days=1)).isoformat())
+        if not plan:
+            # Fall back to next upcoming
+            start = (date.today() + timedelta(days=1)).isoformat()
+            end   = (date.today() + timedelta(days=14)).isoformat()
+            plans = sheets.get_runner_plans(runner_id, from_date=start, to_date=end)
+            upcoming = [p for p in plans if str(p.get("day_type", "")).lower() != "rest"]
+            plan = upcoming[0] if upcoming else None
+        if not plan:
+            return fill_template("plan_no_session", {"first_name": first, "day_label": "your next session"})
+        try:
+            label = date.fromisoformat(plan["date"]).strftime("%A, %d %b")
+        except Exception:
+            label = plan.get("date", "upcoming")
+        session_summary = _format_session(plan)
+        coach_notes   = plan.get("coach_notes", "")
+        workout_notes = plan.get("workout_notes", "")
+        notes         = "\n".join(filter(None, [coach_notes, workout_notes]))
+        return fill_template("plan_today_detail", {
+            "first_name":      first,
+            "day_label":       label,
+            "session_summary": session_summary,
+            "notes_section":   f"\n\n{notes}" if notes else "",
+        })
+
+    date_str, label = _parse_plan_date(message)
+
+    if label == "this week":
+        week_start = date.today().isoformat()
+        week_end   = (date.today() + timedelta(days=7)).isoformat()
+        plans = sheets.get_runner_plans(runner_id, from_date=week_start, to_date=week_end)
+        if not plans:
+            return fill_template("plan_no_session", {"first_name": first, "day_label": "this week"})
+
+        lines = []
+        for p in plans:
+            try:
+                day_label = date.fromisoformat(p["date"]).strftime("%a %d %b")
+            except Exception:
+                day_label = p["date"]
+            if str(p.get("day_type", "")).lower() == "rest":
+                lines.append(f"{day_label}: Rest day")
+            else:
+                lines.append(f"{day_label}: {_format_session(p)}")
+
+        race_goal     = runner.get("race_goal") or "your goal race"
+        weeks_to_race = str(weeks_until(runner.get("race_date") or ""))
+        return fill_template("plan_week_view", {
+            "first_name":    first,
+            "week_plan":     "\n".join(lines),
+            "weeks_to_race": weeks_to_race,
+            "race_goal":     race_goal,
+        })
+
+    # Specific day
+    if date_str == date.today().isoformat() and today_plan:
+        plan = today_plan
+    else:
+        plan = sheets.get_plan_by_date(runner_id, date_str)
+
+    if not plan:
+        return fill_template("plan_no_session", {"first_name": first, "day_label": label})
+
+    if str(plan.get("day_type", "")).lower() == "rest":
+        return fill_template("plan_no_session", {
+            "first_name": first,
+            "day_label":  f"{label} (it's a scheduled rest day)",
+        })
+
+    session_summary = _format_session(plan)
+    coach_notes     = plan.get("coach_notes", "")
+    workout_notes   = plan.get("workout_notes", "")
+    notes           = "\n".join(filter(None, [coach_notes, workout_notes]))
+    notes_section   = f"\n\n{notes}" if notes else ""
+
+    return fill_template("plan_today_detail", {
+        "first_name":      first,
+        "day_label":       label,
+        "session_summary": session_summary,
+        "notes_section":   notes_section,
+    })
+
+
+async def _handle_plan_change_request(runner: dict, today_plan, message: str,
+                                      request_type: str) -> str:
+    first     = (runner.get("name") or "there").split()[0]
+    runner_id = runner.get("runner_id", "")
+    coach_id  = runner.get("coach_id", "")
+
+    # Use LLM to extract a clean one-sentence description of what the runner wants
+    try:
+        raw_desc = await llm.complete([
+            {"role": "system",
+             "content": ("Extract the runner's plan change request as one clear sentence. "
+                         "Be specific: include the session, the requested change, and the date/day if mentioned. "
+                         "Return only the sentence — no prefix, no explanation.")},
+            {"role": "user", "content": message},
+        ], max_tokens=80)
+        description = raw_desc.strip()[:250]
+    except Exception:
+        description = message[:250]
+
+    date_str, _ = _parse_plan_date(message)
+    plan = None
+    if date_str:
+        plan = today_plan if date_str == date.today().isoformat() else sheets.get_plan_by_date(runner_id, date_str)
+    plan_id = (plan.get("plan_id") or plan.get("_id", "")) if plan else ""
+
+    sheets.create_plan_request(
+        runner_id=runner_id,
+        coach_id=coach_id,
+        request_type=request_type,
+        description=description,
+        session_date=date_str or "",
+        plan_id=plan_id,
+    )
+
+    if request_type == "reschedule":
+        return fill_template("plan_reschedule_flagged", {
+            "first_name":            first,
+            "reschedule_description": description,
+        })
+    return fill_template("plan_tweak_flagged", {
+        "first_name":        first,
+        "tweak_description": description,
+    })
+
+
 # ── Main entry point ──────────────────────────────────────────────────────────
 
 async def select_template_response(
@@ -213,6 +476,14 @@ async def select_template_response(
     Returns the exact filled template text — same content that would go to WhatsApp.
     Template is chosen by rule; variables filled from data first, LLM only for the rest.
     """
+    # Plan intents bypass the template+LLM pipeline — handled by dedicated functions
+    if intent == "plan_query":
+        return await _handle_plan_query(runner, plan, message)
+    if intent == "plan_reschedule":
+        return await _handle_plan_change_request(runner, plan, message, "reschedule")
+    if intent == "plan_tweak":
+        return await _handle_plan_change_request(runner, plan, message, "tweak")
+
     template_id = _pick_template(intent, message, history)
     tmpl = TEMPLATES.get(template_id)
     if not tmpl:

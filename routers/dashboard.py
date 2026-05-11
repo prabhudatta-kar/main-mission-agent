@@ -606,6 +606,35 @@ async def api_delete_runner(runner_id: str):
     return {"ok": True}
 
 
+# ── Plan Requests ─────────────────────────────────────────────────────────────
+
+@router.get("/api/plan-requests")
+async def api_plan_requests(coach_id: str = ""):
+    requests = sheets.get_pending_plan_requests(coach_id)
+    result = []
+    for r in requests:
+        runner = sheets.get_runner(r["runner_id"])
+        result.append({
+            **r,
+            "runner_name": runner.get("name", r["runner_id"]) if runner else r["runner_id"],
+        })
+    return {"requests": sorted(result, key=lambda x: x.get("created_at", ""), reverse=True)}
+
+
+class ResolveReq(BaseModel):
+    resolution: str = ""
+
+@router.post("/api/plan-request/{request_id}/resolve")
+async def api_resolve_plan_request(request_id: str, req: ResolveReq):
+    sheets.resolve_plan_request(request_id, req.resolution)
+    return {"ok": True}
+
+@router.post("/api/plan-request/{request_id}/dismiss")
+async def api_dismiss_plan_request(request_id: str):
+    sheets.dismiss_plan_request(request_id)
+    return {"ok": True}
+
+
 # ── HTML page ─────────────────────────────────────────────────────────────────
 
 @router.get("/", response_class=HTMLResponse)
@@ -700,6 +729,24 @@ header h1{font-size:18px;font-weight:700;flex:1}
 .alert-bar .alert-icon{font-size:18px}
 .alert-bar strong{color:#856404}
 .alert-names{color:#333;flex:1}
+
+/* Plan requests panel */
+.plan-req-bar{background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:12px 16px;margin-bottom:16px}
+.plan-req-bar-hdr{display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:13px;font-weight:600;color:#1e40af}
+.plan-req-list{display:flex;flex-direction:column;gap:6px}
+.plan-req-item{background:#fff;border:1px solid #dbeafe;border-radius:8px;padding:10px 14px;display:flex;align-items:flex-start;gap:12px;font-size:13px}
+.plan-req-type{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;white-space:nowrap;flex-shrink:0}
+.req-reschedule{background:#dbeafe;color:#1e40af}
+.req-tweak{background:#fef3c7;color:#92400e}
+.plan-req-body{flex:1}
+.plan-req-runner{font-weight:600;font-size:12px;color:#555;margin-bottom:2px}
+.plan-req-desc{color:#1a1a2e;line-height:1.4}
+.plan-req-date{font-size:11px;color:#aaa;margin-top:2px}
+.plan-req-actions{display:flex;gap:6px;flex-shrink:0;margin-top:2px}
+.req-done-btn{background:#dcfce7;border:none;color:#166534;padding:4px 10px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer}
+.req-done-btn:hover{background:#bbf7d0}
+.req-dismiss-btn{background:#f3f4f6;border:none;color:#6b7280;padding:4px 10px;border-radius:6px;font-size:12px;cursor:pointer}
+.req-dismiss-btn:hover{background:#e5e7eb}
 
 /* Toolbar */
 .toolbar{display:flex;gap:10px;margin-bottom:14px;align-items:center}
@@ -925,6 +972,12 @@ td small{display:block;font-size:11px;color:#999;margin-top:2px}
         <strong>Needs attention: </strong>
         <span class="alert-names" id="alert-names"></span>
       </div>
+    </div>
+
+    <!-- Plan requests bar -->
+    <div class="plan-req-bar" id="plan-req-bar" style="display:none">
+      <div class="plan-req-bar-hdr">📋 Plan change requests <span id="plan-req-count"></span></div>
+      <div class="plan-req-list" id="plan-req-list"></div>
     </div>
 
     <!-- Toolbar -->
@@ -1165,6 +1218,7 @@ async function loadData() {
     updateTiles();
     updateAlertBar();
     renderTable();
+    loadPlanRequests();
   } catch(e) {
     document.getElementById('tbody').innerHTML =
       `<tr><td colspan="7" class="loading" style="color:red">Error loading data: ${e.message}</td></tr>`;
@@ -1199,6 +1253,57 @@ function updateAlertBar() {
   bar.style.display = 'flex';
   document.getElementById('alert-names').textContent =
     flagged.map(r => `${r.name} (${r.flags || 'flagged'})`).join(' · ');
+}
+
+// ── Plan requests bar ─────────────────────────────────────────────────────────
+
+async function loadPlanRequests() {
+  try {
+    const res = await fetch('/dashboard/api/plan-requests');
+    const data = await res.json();
+    const requests = data.requests || [];
+    const bar  = document.getElementById('plan-req-bar');
+    const list = document.getElementById('plan-req-list');
+    const cnt  = document.getElementById('plan-req-count');
+
+    if (requests.length === 0) { bar.style.display = 'none'; return; }
+
+    bar.style.display = 'block';
+    cnt.textContent = `(${requests.length})`;
+    list.innerHTML = requests.map(r => {
+      const typeClass = r.request_type === 'reschedule' ? 'req-reschedule' : 'req-tweak';
+      const typeLabel = r.request_type === 'reschedule' ? 'Reschedule' : 'Tweak';
+      const dateStr   = r.session_date ? ` · ${r.session_date}` : '';
+      return `<div class="plan-req-item" id="preq-${r.request_id}">
+        <span class="plan-req-type ${typeClass}">${typeLabel}</span>
+        <div class="plan-req-body">
+          <div class="plan-req-runner">${r.runner_name}</div>
+          <div class="plan-req-desc">${r.description}</div>
+          <div class="plan-req-date">${r.created_at}${dateStr}</div>
+        </div>
+        <div class="plan-req-actions">
+          <button class="req-done-btn" onclick="resolvePlanRequest('${r.request_id}')">✓ Done</button>
+          <button class="req-dismiss-btn" onclick="dismissPlanRequest('${r.request_id}')">Dismiss</button>
+        </div>
+      </div>`;
+    }).join('');
+  } catch(e) { console.error('Plan requests load error:', e); }
+}
+
+async function resolvePlanRequest(id) {
+  await fetch(`/dashboard/api/plan-request/${id}/resolve`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({resolution:'done'})});
+  document.getElementById('preq-' + id)?.remove();
+  const remaining = document.querySelectorAll('[id^="preq-"]').length;
+  if (remaining === 0) document.getElementById('plan-req-bar').style.display = 'none';
+  document.getElementById('plan-req-count').textContent = remaining > 0 ? `(${remaining})` : '';
+}
+
+async function dismissPlanRequest(id) {
+  await fetch(`/dashboard/api/plan-request/${id}/dismiss`, {method:'POST'});
+  document.getElementById('preq-' + id)?.remove();
+  const remaining = document.querySelectorAll('[id^="preq-"]').length;
+  if (remaining === 0) document.getElementById('plan-req-bar').style.display = 'none';
+  document.getElementById('plan-req-count').textContent = remaining > 0 ? `(${remaining})` : '';
 }
 
 // ── Table ─────────────────────────────────────────────────────────────────────
@@ -2332,6 +2437,7 @@ async function savePlanPreview() {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 loadData();
+loadPlanRequests();
 </script>
 </body>
 </html>"""

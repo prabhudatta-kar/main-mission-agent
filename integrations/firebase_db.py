@@ -258,6 +258,54 @@ class FirebaseClient:
             return _doc(d)
         return None
 
+    def get_plan_by_date(self, runner_id: str, date_str: str) -> dict:
+        for d in (self._col("training_plans")
+                  .where("runner_id", "==", runner_id)
+                  .where("date", "==", date_str)
+                  .limit(1).stream()):
+            return _doc(d)
+        return None
+
+    # ── Plan Requests (runner-initiated change/reschedule requests) ───────────
+
+    def create_plan_request(self, runner_id: str, coach_id: str, request_type: str,
+                            description: str, session_date: str = "", plan_id: str = "") -> str:
+        req_id = f"REQ_{str(uuid.uuid4())[:6].upper()}"
+        self._col("plan_requests").document(req_id).set({
+            "request_id":   req_id,
+            "runner_id":    runner_id,
+            "coach_id":     coach_id,
+            "request_type": request_type,   # "reschedule" | "tweak" | "skip"
+            "description":  description,
+            "session_date": session_date,
+            "plan_id":      plan_id,
+            "status":       "pending",
+            "created_at":   _now_ist(),
+            "resolved_at":  "",
+            "resolution":   "",
+        })
+        logger.info(f"Plan request {req_id} for runner {runner_id}: {request_type}")
+        return req_id
+
+    def get_pending_plan_requests(self, coach_id: str = "") -> list:
+        q = self._col("plan_requests").where("status", "==", "pending")
+        if coach_id:
+            q = q.where("coach_id", "==", coach_id)
+        return self._stream(q)
+
+    def resolve_plan_request(self, request_id: str, resolution: str = ""):
+        self._col("plan_requests").document(request_id).update({
+            "status":      "resolved",
+            "resolved_at": _now_ist(),
+            "resolution":  resolution,
+        })
+
+    def dismiss_plan_request(self, request_id: str):
+        self._col("plan_requests").document(request_id).update({
+            "status":      "dismissed",
+            "resolved_at": _now_ist(),
+        })
+
     def get_all_todays_plans(self) -> dict:
         today = date.today().isoformat()
         result = {}

@@ -56,8 +56,7 @@ Tone rules (non-negotiable):
 
 Good example: "Easy pace today — if you can't hold a conversation, slow down. Glutes tight? Hip circles before you head out."
 Bad example: "It's really important to make sure you maintain a comfortable conversational pace on easy days, as this helps build your aerobic base while ensuring proper recovery!"
-
-Return only valid JSON. No markdown.""",
+""",
 
     "creative_vars_user": """Fill template variables for a WhatsApp reply from a running coach.
 
