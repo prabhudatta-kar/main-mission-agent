@@ -418,6 +418,8 @@ class FirebaseClient:
             (base_id,       "inbound",  inbound),
             (base_id + "_r","outbound", outbound),
         ]:
+            if not message:   # skip empty records — they appear as phantom bubbles in the dashboard
+                continue
             col.document(log_id).set({
                 "log_id":            log_id,
                 "timestamp":         ts,
