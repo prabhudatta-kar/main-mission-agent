@@ -153,7 +153,10 @@ async def api_remind_session(plan_id: str):
     coach_notes  = plan.get("coach_notes", "")
     date_str     = plan.get("date", "")
 
-    metric = f"{dist}km" if dist and dist != "0" else (f"{duration}min" if duration and duration != "0" else "")
+    reps         = plan.get("reps", "")
+    rep_dist     = plan.get("rep_distance_m", "")
+    interval_str = f"{reps} × {rep_dist}m" if reps and rep_dist else ""
+    metric = interval_str or (f"{dist}km" if dist and dist != "0" else (f"{duration}min" if duration and duration != "0" else ""))
     detail = f"{metric} at {intensity}" if metric and intensity else (metric or intensity)
     notes_part = f"\n\n{coach_notes}" if coach_notes else ""
 
@@ -264,8 +267,10 @@ Return ONLY a JSON array. Each element:
   "date": "YYYY-MM-DD",
   "day_type": "Run|Rest|Cross-train",
   "session_type": "Easy Run|Tempo Run|Interval Training|Fartlek|Long Run|Recovery Run|Cross Training|Rest",
-  "distance_km": number (0 for rest/cross-train or time-based sessions),
-  "duration_min": number (minutes, use instead of distance_km for time-based sessions like easy efforts or cross-training; 0 if distance-based),
+  "distance_km": number (total distance; 0 for interval/time-based sessions),
+  "duration_min": number (minutes for time-based sessions; 0 if distance-based),
+  "reps": number or "" (for Interval Training/Fartlek: number of repetitions e.g. 8),
+  "rep_distance_m": number or "" (metres per rep e.g. 400 for 400m intervals),
   "intensity": "Zone 2|Threshold|VO2 Max|Easy|Rest",
   "rpe_target": "3-4|4-5|5-6|6-7|7-8|8-9",
   "coach_notes": "specific instruction for this session"
@@ -287,14 +292,17 @@ Include every day from {start} to {end}. Training days should have sessions; non
 
 
 class PlanEntry(BaseModel):
-    runner_id:    str
-    date:         str
-    day_type:     str = "Run"
-    session_type: str = "Easy Run"
-    distance_km:  str = ""
-    intensity:    str = "Zone 2"
-    rpe_target:   str = "4-5"
-    coach_notes:  str = ""
+    runner_id:     str
+    date:          str
+    day_type:      str = "Run"
+    session_type:  str = "Easy Run"
+    distance_km:   str = ""
+    duration_min:  str = ""
+    reps:          str = ""   # e.g. "8" for 8 repetitions
+    rep_distance_m: str = ""  # e.g. "400" for 400m per rep
+    intensity:     str = "Zone 2"
+    rpe_target:    str = "4-5"
+    coach_notes:   str = ""
 
 @router.post("/api/plan")
 async def api_create_plan(req: PlanEntry):
@@ -382,12 +390,15 @@ async def _notify_plan_created(runner_id: str, sessions: list):
 
 
 class PlanUpdateReq(BaseModel):
-    session_type: str = ""
-    distance_km:  str = ""
-    intensity:    str = ""
-    rpe_target:   str = ""
-    coach_notes:  str = ""
-    day_type:     str = ""
+    session_type:   str = ""
+    distance_km:    str = ""
+    duration_min:   str = ""
+    reps:           str = ""
+    rep_distance_m: str = ""
+    intensity:      str = ""
+    rpe_target:     str = ""
+    coach_notes:    str = ""
+    day_type:       str = ""
 
 @router.put("/api/plan/{plan_id}")
 async def api_update_plan(plan_id: str, req: PlanUpdateReq):
@@ -1527,6 +1538,18 @@ async function markComplete(runnerId, distance) {
 
 // ── Runner edit / delete ──────────────────────────────────────────────────────
 
+const INTERVAL_TYPES = new Set(['Interval Training', 'Fartlek']);
+
+function onSessionTypeChange(prefix) {
+  const typeEl     = document.getElementById(`${prefix}-type`);
+  const intervalEl = document.getElementById(`${prefix}-interval-row`);
+  const distRowEl  = document.getElementById(`${prefix}-dist-row`) || document.getElementById(`${prefix}-dist-row`);
+  if (!typeEl) return;
+  const isInterval = INTERVAL_TYPES.has(typeEl.value);
+  if (intervalEl) intervalEl.style.display = isInterval ? 'flex' : 'none';
+  // When interval mode: distance row is secondary (still useful for total vol)
+}
+
 function toggleTimeBased(prefix) {
   const distEl  = document.getElementById(`${prefix}-dist`);
   const durEl   = document.getElementById(`${prefix}-dur`);
@@ -1829,9 +1852,12 @@ function renderPlanList(plans, runnerId) {
       const d   = new Date(p.date);
       const dayStr = d.toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short'});
       const sc  = sessionClass(p.session_type);
-      const dist = p.distance_km && p.distance_km != '0'
+      const intervalStr = (p.reps && p.rep_distance_m)
+        ? `${p.reps} × ${p.rep_distance_m}m · `
+        : '';
+      const dist = intervalStr || (p.distance_km && p.distance_km != '0'
         ? `${p.distance_km}km · `
-        : (p.duration_min && p.duration_min != '0' ? `${p.duration_min}min · ` : '');
+        : (p.duration_min && p.duration_min != '0' ? `${p.duration_min}min · ` : ''));
       const done = p.completed === 'TRUE' ? ' ✓' : '';
       html += `<div class="session-card ${sc}" id="sc-${pid}">
         <div class="sc-date">${dayStr}</div>
@@ -1860,13 +1886,17 @@ function showAddForm(runnerId) {
     <strong style="font-size:12px">Add Session</strong>
     <div class="ef-row" style="margin-top:8px">
       <div><label>Date</label><input type="date" id="ef-date" value="${dateStr}"></div>
-      <div><label>Session type</label><select id="ef-type">
+      <div><label>Session type</label><select id="ef-type" onchange="onSessionTypeChange('ef')">
         <option>Easy Run</option><option>Tempo Run</option><option>Interval Training</option>
         <option>Fartlek</option><option>Long Run</option><option>Recovery Run</option>
         <option>Cross Training</option><option>Rest</option>
       </select></div>
     </div>
-    <div class="ef-row">
+    <div class="ef-row" id="ef-interval-row" style="display:none">
+      <div><label>Reps</label><input type="number" id="ef-reps" placeholder="e.g. 8" min="1"></div>
+      <div><label>Metres per rep</label><input type="number" id="ef-repm" placeholder="e.g. 400" step="50"></div>
+    </div>
+    <div class="ef-row" id="ef-dist-row">
       <div>
         <label>
           <span id="ef-dist-lbl">Distance (km)</span>
@@ -1899,10 +1929,12 @@ async function saveNewPlan(runnerId) {
   const payload = {
     runner_id:    runnerId,
     date:         document.getElementById('ef-date').value,
-    session_type: document.getElementById('ef-type').value,
-    day_type:     document.getElementById('ef-type').value === 'Rest' ? 'Rest' : 'Run',
-    distance_km:  document.getElementById('ef-dist').style.display !== 'none' ? (document.getElementById('ef-dist').value || '0') : '0',
-    duration_min: document.getElementById('ef-dur').style.display !== 'none'  ? (document.getElementById('ef-dur').value  || '0') : '0',
+    session_type:   document.getElementById('ef-type').value,
+    day_type:       document.getElementById('ef-type').value === 'Rest' ? 'Rest' : 'Run',
+    reps:           document.getElementById('ef-reps')?.value || '',
+    rep_distance_m: document.getElementById('ef-repm')?.value || '',
+    distance_km:    document.getElementById('ef-dist').style.display !== 'none' ? (document.getElementById('ef-dist').value || '0') : '0',
+    duration_min:   document.getElementById('ef-dur').style.display !== 'none'  ? (document.getElementById('ef-dur').value  || '0') : '0',
     intensity:    document.getElementById('ef-intensity').value,
     rpe_target:   document.getElementById('ef-rpe').value || '4-5',
     coach_notes:  document.getElementById('ef-notes').value,
@@ -1921,7 +1953,7 @@ function showEditForm(planId, runnerId) {
 
   existing.innerHTML = `<div class="edit-form" style="margin-top:8px">
     <div class="ef-row">
-      <div><label>Session type</label><select id="eft-type-${planId}">
+      <div><label>Session type</label><select id="eft-type-${planId}" onchange="onSessionTypeChange('eft-${planId}')">
         <option>Easy Run</option><option>Tempo Run</option><option>Interval Training</option>
         <option>Fartlek</option><option>Long Run</option><option>Recovery Run</option>
         <option>Cross Training</option><option>Rest</option>
@@ -1936,6 +1968,10 @@ function showEditForm(planId, runnerId) {
         <input id="eft-dist-${planId}" type="number" step="0.5" placeholder="0" style="display:block">
         <input id="eft-dur-${planId}"  type="number" step="5"   placeholder="mins" style="display:none">
       </div>
+    </div>
+    <div class="ef-row" id="eft-interval-row-${planId}" style="display:none">
+      <div><label>Reps</label><input id="eft-reps-${planId}" type="number" placeholder="e.g. 8" min="1"></div>
+      <div><label>Metres per rep</label><input id="eft-repm-${planId}" type="number" placeholder="e.g. 400" step="50"></div>
     </div>
     <div class="ef-row">
       <div><label>Intensity</label><select id="eft-int-${planId}">
@@ -1960,11 +1996,15 @@ async function savePlanEdit(planId, runnerId) {
   const r = document.getElementById(`eft-rpe-${planId}`)?.value;
   const n = document.getElementById(`eft-notes-${planId}`)?.value;
   const dur = document.getElementById(`eft-dur-${planId}`)?.value;
+  const reps = document.getElementById(`eft-reps-${planId}`)?.value;
+  const repm = document.getElementById(`eft-repm-${planId}`)?.value;
   if (t) { fields.session_type = t; fields.day_type = t === 'Rest' ? 'Rest' : 'Run'; }
-  if (d) fields.distance_km = d;
-  if (dur) fields.duration_min = dur;
-  if (i) fields.intensity    = i;
-  if (r) fields.rpe_target   = r;
+  if (d)    fields.distance_km    = d;
+  if (dur)  fields.duration_min   = dur;
+  if (reps) fields.reps           = reps;
+  if (repm) fields.rep_distance_m = repm;
+  if (i)    fields.intensity      = i;
+  if (r)    fields.rpe_target     = r;
   if (n !== undefined) fields.coach_notes = n;
 
   const res = await fetch(`/dashboard/api/plan/${planId}`, {
