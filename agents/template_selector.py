@@ -173,11 +173,24 @@ async def _fill_creative_vars(
         .replace("{descriptions}",  json.dumps(descriptions, indent=2))
     )
 
-    # Inject relevant coaching KB sections based on intent + message content
+    # Build system message: base tone rules → KB context → coach rules (highest priority)
     coaching_ctx = get_coaching_context(intent, message)
-    system_msg = get_prompt("creative_vars_system")
+    system_msg   = get_prompt("creative_vars_system")
+
     if coaching_ctx:
         system_msg = f"{system_msg}\n\n{coaching_ctx}"
+
+    # Coach's personal rules override the knowledge base
+    coach_id = runner.get("coach_id", "")
+    if coach_id:
+        coach_rules = sheets.get_active_rules(coach_id)
+        if coach_rules:
+            rules_text = "\n".join(
+                f"- {r['rule_derived']}" for r in coach_rules if r.get("rule_derived")
+            )
+            system_msg += (
+                f"\n\nCOACH'S RULES — these override the knowledge base above. Always follow:\n{rules_text}"
+            )
 
     try:
         raw = await llm.complete([
