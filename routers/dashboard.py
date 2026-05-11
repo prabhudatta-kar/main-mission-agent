@@ -135,6 +135,19 @@ async def api_send_message(req: MessageReq):
     return {"ok": True}
 
 
+@router.post("/api/runner/{runner_id}/handback")
+async def api_handback(runner_id: str):
+    """Coach hands control back to the AI agent."""
+    runner = sheets.get_runner(runner_id)
+    if not runner:
+        return JSONResponse({"error": "Runner not found"}, status_code=404)
+    sheets.log_conversation(
+        runner_id, runner.get("coach_id", ""),
+        inbound="", outbound="[handback]", intent="coach_handback"
+    )
+    return {"ok": True}
+
+
 class NoteReq(BaseModel):
     coach_id:  str
     runner_id: str
@@ -1412,6 +1425,10 @@ function updateComposeArea(tabName) {
       <div class="compose-actions">
         <button class="send-btn" id="send-btn" onclick="sendMessage()">Send WhatsApp</button>
         <button class="note-btn" id="note-btn" onclick="addNote()">Save as Instruction</button>
+        <button id="handback-btn" title="Hand back to AI agent" onclick="handbackToAI()"
+          style="background:#f0fdf4;color:#16a34a;border:1px solid #86efac;border-radius:8px;padding:8px 12px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap">
+          🤖 Hand to AI
+        </button>
       </div>`;
   }
 }
@@ -1490,6 +1507,17 @@ function toggleTimeBased(prefix) {
   durEl.style.display  = isTime ? 'none'  : 'block';
   if (lblEl)  lblEl.textContent  = isTime ? 'Distance (km)' : 'Duration (mins)';
   if (hintEl) hintEl.textContent = isTime ? 'time' : 'distance';
+}
+
+async function handbackToAI() {
+  if (!activeRunner) return;
+  const rid = activeRunner.runner_id;
+  try {
+    const res = await fetch(`/dashboard/api/runner/${rid}/handback`, {method: 'POST'});
+    const d   = await res.json();
+    if (d.ok) toast('Handed back to AI — agent will reply to next message ✓');
+    else toast(d.error || 'Failed', true);
+  } catch(e) { toast('Error: ' + e.message, true); }
 }
 
 async function markAsPaid(runnerId) {

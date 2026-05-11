@@ -12,21 +12,26 @@ logger = logging.getLogger(__name__)
 
 
 def _coach_recently_messaged(recent_messages: list, window_minutes: int = 30) -> bool:
-    """True if the coach sent a manual message within the last window_minutes."""
+    """True if coach has manual control and hasn't handed back to AI."""
     from datetime import datetime
-    cutoff = (datetime.now().timestamp() - window_minutes * 60)
+    cutoff = datetime.now().timestamp() - window_minutes * 60
     for m in reversed(recent_messages):
-        if m.get("direction") != "outbound":
-            continue
-        if m.get("message_type") == "coach_direct":
+        mtype = m.get("message_type", "")
+        direction = m.get("direction", "")
+        # Coach explicitly handed back — AI resumes
+        if mtype == "coach_handback":
+            return False
+        # Coach sent a manual message recently — AI stays silent
+        if direction == "outbound" and mtype == "coach_direct":
             try:
                 ts = datetime.strptime(m["timestamp"], "%Y-%m-%d %H:%M:%S").timestamp()
                 if ts >= cutoff:
                     return True
             except Exception:
                 pass
-        # Any inbound message resets the takeover (runner was already chatting with AI)
-        if m.get("direction") == "inbound":
+            return False   # coach_direct found but outside window
+        # AI was handling it — no takeover
+        if direction == "outbound" and mtype not in ("coach_direct", "coach_takeover", "payment_reminder", "payment_help"):
             return False
     return False
 
