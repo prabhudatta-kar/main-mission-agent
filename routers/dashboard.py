@@ -150,15 +150,17 @@ async def api_remind_session(plan_id: str):
     dist         = plan.get("distance_km", "")
     duration     = plan.get("duration_min", "")
     intensity    = plan.get("intensity", "")
-    coach_notes  = plan.get("coach_notes", "")
-    date_str     = plan.get("date", "")
+    coach_notes   = plan.get("coach_notes", "")
+    workout_notes = plan.get("workout_notes", "")
+    date_str      = plan.get("date", "")
 
     reps         = plan.get("reps", "")
     rep_dist     = plan.get("rep_distance_m", "")
     interval_str = f"{reps} × {rep_dist}m" if reps and rep_dist else ""
     metric = interval_str or (f"{dist}km" if dist and dist != "0" else (f"{duration}min" if duration and duration != "0" else ""))
     detail = f"{metric} at {intensity}" if metric and intensity else (metric or intensity)
-    notes_part = f"\n\n{coach_notes}" if coach_notes else ""
+    extras = "\n".join(filter(None, [coach_notes, workout_notes]))
+    notes_part = f"\n\n{extras}" if extras else ""
 
     msg = f"Reminder: {session_type} today{', ' + detail if detail else ''}. {notes_part}".strip()
 
@@ -273,7 +275,8 @@ Return ONLY a JSON array. Each element:
   "rep_distance_m": number or "" (metres per rep e.g. 400 for 400m intervals),
   "intensity": "Zone 2|Threshold|VO2 Max|Easy|Rest",
   "rpe_target": "3-4|4-5|5-6|6-7|7-8|8-9",
-  "coach_notes": "specific instruction for this session"
+  "coach_notes": "coaching cue for this session e.g. 'take it easy today'",
+  "workout_notes": "general tips about this workout type e.g. 'avoid heavy meals 2h before, stay hydrated'"
 }}
 
 Include every day from {start} to {end}. Training days should have sessions; non-training days should be Rest with distance_km 0."""
@@ -303,6 +306,7 @@ class PlanEntry(BaseModel):
     intensity:     str = "Zone 2"
     rpe_target:    str = "4-5"
     coach_notes:   str = ""
+    workout_notes: str = ""
 
 @router.post("/api/plan")
 async def api_create_plan(req: PlanEntry):
@@ -398,6 +402,7 @@ class PlanUpdateReq(BaseModel):
     intensity:      str = ""
     rpe_target:     str = ""
     coach_notes:    str = ""
+    workout_notes:  str = ""
     day_type:       str = ""
 
 @router.put("/api/plan/{plan_id}")
@@ -809,7 +814,8 @@ td small{display:block;font-size:11px;color:#999;margin-top:2px}
 .sc-body{flex:1}
 .sc-title{font-weight:700}
 .sc-meta{font-size:11px;color:#666;margin-top:2px}
-.sc-notes{font-size:11px;color:#555;margin-top:4px;line-height:1.4}
+.sc-notes{font-size:11px;color:#3730a3;background:#f0f4ff;padding:3px 7px;border-radius:4px;margin-top:4px;line-height:1.4}
+.sc-workout-notes{font-size:11px;color:#92400e;background:#fffbeb;padding:3px 7px;border-radius:4px;margin-top:3px;line-height:1.4}
 .sc-actions{display:flex;gap:4px;opacity:0;transition:opacity .15s}
 .session-card:hover .sc-actions{opacity:1}
 .sc-btn{background:none;border:1px solid #e5e7eb;border-radius:4px;padding:2px 6px;font-size:11px;cursor:pointer;color:#555}
@@ -1864,7 +1870,8 @@ function renderPlanList(plans, runnerId) {
         <div class="sc-body">
           <div class="sc-title">${p.session_type||'—'}${done}</div>
           <div class="sc-meta">${dist}${p.intensity||''} · RPE ${p.rpe_target||'—'}</div>
-          ${p.coach_notes ? `<div class="sc-notes">${p.coach_notes}</div>` : ''}
+          ${p.coach_notes ? `<div class="sc-notes">💬 ${p.coach_notes}</div>` : ''}
+          ${p.workout_notes ? `<div class="sc-workout-notes">📋 ${p.workout_notes}</div>` : ''}
           <div id="ef-${pid}"></div>
         </div>
         <div class="sc-actions">
@@ -1915,8 +1922,10 @@ function showAddForm(runnerId) {
       <div><label>RPE target</label><input id="ef-rpe" placeholder="4-5"></div>
       <div></div>
     </div>
-    <label>Coach notes</label>
-    <textarea id="ef-notes" rows="2" placeholder="Specific instructions for this session…" style="margin-bottom:6px"></textarea>
+    <label>Coach notes <span style="color:#6366f1;font-size:10px;font-weight:400">(coaching instruction, e.g. "take it easy")</span></label>
+    <textarea id="ef-notes" rows="2" placeholder="e.g. Take it easy today, listen to your body" style="margin-bottom:6px"></textarea>
+    <label>Workout notes <span style="color:#92400e;font-size:10px;font-weight:400">(general tips, e.g. "don't eat heavy before")</span></label>
+    <textarea id="ef-workout-notes" rows="2" placeholder="e.g. Avoid heavy meals 2h before. Stay hydrated." style="margin-bottom:6px"></textarea>
     <div class="edit-form-actions">
       <button class="ef-save" onclick="saveNewPlan('${runnerId}')">Save</button>
       <button class="ef-cancel" onclick="document.getElementById('add-form').remove()">Cancel</button>
@@ -1937,7 +1946,8 @@ async function saveNewPlan(runnerId) {
     duration_min:   document.getElementById('ef-dur').style.display !== 'none'  ? (document.getElementById('ef-dur').value  || '0') : '0',
     intensity:    document.getElementById('ef-intensity').value,
     rpe_target:   document.getElementById('ef-rpe').value || '4-5',
-    coach_notes:  document.getElementById('ef-notes').value,
+    coach_notes:    document.getElementById('ef-notes').value,
+    workout_notes:  document.getElementById('ef-workout-notes').value,
   };
   const res = await fetch('/dashboard/api/plan', {
     method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
@@ -1979,8 +1989,10 @@ function showEditForm(planId, runnerId) {
       </select></div>
       <div><label>RPE target</label><input id="eft-rpe-${planId}" placeholder="4-5"></div>
     </div>
-    <label>Coach notes</label>
-    <textarea id="eft-notes-${planId}" rows="2" style="margin-bottom:6px" placeholder="Updated instructions…"></textarea>
+    <label>Coach notes <span style="color:#6366f1;font-size:10px;font-weight:400">(coaching cue)</span></label>
+    <textarea id="eft-notes-${planId}" rows="2" style="margin-bottom:6px" placeholder="e.g. Take it easy"></textarea>
+    <label>Workout notes <span style="color:#92400e;font-size:10px;font-weight:400">(general tips)</span></label>
+    <textarea id="eft-workout-notes-${planId}" rows="2" style="margin-bottom:6px" placeholder="e.g. Avoid heavy meals 2h before"></textarea>
     <div class="edit-form-actions">
       <button class="ef-save" onclick="savePlanEdit('${planId}','${runnerId}')">Save</button>
       <button class="ef-cancel" onclick="document.getElementById('ef-${planId}').innerHTML=''">Cancel</button>
@@ -2005,7 +2017,9 @@ async function savePlanEdit(planId, runnerId) {
   if (repm) fields.rep_distance_m = repm;
   if (i)    fields.intensity      = i;
   if (r)    fields.rpe_target     = r;
-  if (n !== undefined) fields.coach_notes = n;
+  const wn = document.getElementById(`eft-workout-notes-${planId}`)?.value;
+  if (n  !== undefined) fields.coach_notes   = n;
+  if (wn !== undefined) fields.workout_notes = wn;
 
   const res = await fetch(`/dashboard/api/plan/${planId}`, {
     method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(fields)
