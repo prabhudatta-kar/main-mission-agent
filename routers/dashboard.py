@@ -214,14 +214,15 @@ Training principles:
 - Hard/easy alternation — never two hard sessions back to back
 - Include 1-2 rest days per week
 - Taper the final 1-2 weeks before race
-- Session types: Easy Run, Tempo Run, Interval Training, Long Run, Recovery Run, Cross Training, Rest
+- Session types: Easy Run, Tempo Run, Interval Training, Fartlek, Long Run, Recovery Run, Cross Training, Rest
 
 Return ONLY a JSON array. Each element:
 {{
   "date": "YYYY-MM-DD",
   "day_type": "Run|Rest|Cross-train",
-  "session_type": "Easy Run|Tempo Run|Interval Training|Long Run|Recovery Run|Cross Training|Rest",
-  "distance_km": number (0 for rest/cross-train),
+  "session_type": "Easy Run|Tempo Run|Interval Training|Fartlek|Long Run|Recovery Run|Cross Training|Rest",
+  "distance_km": number (0 for rest/cross-train or time-based sessions),
+  "duration_min": number (minutes, use instead of distance_km for time-based sessions like easy efforts or cross-training; 0 if distance-based),
   "intensity": "Zone 2|Threshold|VO2 Max|Easy|Rest",
   "rpe_target": "3-4|4-5|5-6|6-7|7-8|8-9",
   "coach_notes": "specific instruction for this session"
@@ -403,8 +404,9 @@ Respond ONLY with a JSON object (no markdown fences):
     {{
       "date": "YYYY-MM-DD",
       "day_type": "Run|Rest|Cross-train",
-      "session_type": "Easy Run|Tempo Run|Interval Training|Long Run|Recovery Run|Cross Training|Rest",
-      "distance_km": number,
+      "session_type": "Easy Run|Tempo Run|Interval Training|Fartlek|Long Run|Recovery Run|Cross Training|Rest",
+      "distance_km": number (0 for time-based sessions),
+      "duration_min": number (minutes for time-based sessions, 0 if distance-based),
       "intensity": "Zone 2|Threshold|VO2 Max|Easy|Rest",
       "rpe_target": "4-5",
       "coach_notes": "specific instruction for this session"
@@ -747,6 +749,7 @@ td small{display:block;font-size:11px;color:#999;margin-top:2px}
 .sc-long{background:#faf5ff;border-left:3px solid #a855f7}
 .sc-recovery{background:#f0fdf4;border-left:3px solid #86efac}
 .sc-rest{background:#f9fafb;border-left:3px solid #d1d5db;color:#9ca3af}
+.sc-fartlek{background:#fefce8;border-left:3px solid #eab308}
 .sc-cross{background:#eff6ff;border-left:3px solid #60a5fa}
 .sc-date{font-size:11px;font-weight:700;color:#666;min-width:60px;flex-shrink:0;padding-top:2px}
 .sc-body{flex:1}
@@ -1420,6 +1423,19 @@ async function markComplete(runnerId, distance) {
 
 // ── Runner edit / delete ──────────────────────────────────────────────────────
 
+function toggleTimeBased(prefix) {
+  const distEl  = document.getElementById(`${prefix}-dist`);
+  const durEl   = document.getElementById(`${prefix}-dur`);
+  const lblEl   = document.getElementById(`${prefix}-dist-lbl`);
+  const hintEl  = document.getElementById(`${prefix}-mode-hint`);
+  if (!distEl || !durEl) return;
+  const isTime = distEl.style.display === 'none';
+  distEl.style.display = isTime ? 'block' : 'none';
+  durEl.style.display  = isTime ? 'none'  : 'block';
+  if (lblEl)  lblEl.textContent  = isTime ? 'Distance (km)' : 'Duration (mins)';
+  if (hintEl) hintEl.textContent = isTime ? 'time' : 'distance';
+}
+
 async function markAsPaid(runnerId) {
   if (!confirm('Mark this runner as Paid? This updates their payment status in Firebase.')) return;
   try {
@@ -1641,6 +1657,7 @@ async function ruleAction(action, ruleId) {
 const SESSION_COLORS = {
   'Easy Run':'sc-easy', 'Tempo Run':'sc-tempo', 'Interval Training':'sc-interval',
   'Long Run':'sc-long',  'Recovery Run':'sc-recovery', 'Rest':'sc-rest',
+  'Fartlek':'sc-fartlek',
   'Cross Training':'sc-cross', 'Cross-train':'sc-cross',
 };
 
@@ -1684,7 +1701,9 @@ function renderPlanList(plans, runnerId) {
       const d   = new Date(p.date);
       const dayStr = d.toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short'});
       const sc  = sessionClass(p.session_type);
-      const dist = p.distance_km && p.distance_km != '0' ? `${p.distance_km}km · ` : '';
+      const dist = p.distance_km && p.distance_km != '0'
+        ? `${p.distance_km}km · `
+        : (p.duration_min && p.duration_min != '0' ? `${p.duration_min}min · ` : '');
       const done = p.completed === 'TRUE' ? ' ✓' : '';
       html += `<div class="session-card ${sc}" id="sc-${pid}">
         <div class="sc-date">${dayStr}</div>
@@ -1714,11 +1733,21 @@ function showAddForm(runnerId) {
       <div><label>Date</label><input type="date" id="ef-date" value="${dateStr}"></div>
       <div><label>Session type</label><select id="ef-type">
         <option>Easy Run</option><option>Tempo Run</option><option>Interval Training</option>
-        <option>Long Run</option><option>Recovery Run</option><option>Cross Training</option><option>Rest</option>
+        <option>Fartlek</option><option>Long Run</option><option>Recovery Run</option>
+        <option>Cross Training</option><option>Rest</option>
       </select></div>
     </div>
     <div class="ef-row">
-      <div><label>Distance (km)</label><input type="number" id="ef-dist" placeholder="0" step="0.5"></div>
+      <div>
+        <label>
+          <span id="ef-dist-lbl">Distance (km)</span>
+          <span style="margin-left:8px;font-size:11px;color:#6366f1;cursor:pointer" onclick="toggleTimeBased('ef')">
+            switch to <span id="ef-mode-hint">time</span>
+          </span>
+        </label>
+        <input type="number" id="ef-dist" placeholder="0" step="0.5" style="display:block">
+        <input type="number" id="ef-dur" placeholder="mins" step="5" style="display:none">
+      </div>
       <div><label>Intensity</label><select id="ef-intensity">
         <option>Zone 2</option><option>Threshold</option><option>VO2 Max</option><option>Easy</option><option>Rest</option>
       </select></div>
@@ -1743,7 +1772,8 @@ async function saveNewPlan(runnerId) {
     date:         document.getElementById('ef-date').value,
     session_type: document.getElementById('ef-type').value,
     day_type:     document.getElementById('ef-type').value === 'Rest' ? 'Rest' : 'Run',
-    distance_km:  document.getElementById('ef-dist').value || '0',
+    distance_km:  document.getElementById('ef-dist').style.display !== 'none' ? (document.getElementById('ef-dist').value || '0') : '0',
+    duration_min: document.getElementById('ef-dur').style.display !== 'none'  ? (document.getElementById('ef-dur').value  || '0') : '0',
     intensity:    document.getElementById('ef-intensity').value,
     rpe_target:   document.getElementById('ef-rpe').value || '4-5',
     coach_notes:  document.getElementById('ef-notes').value,
@@ -1764,9 +1794,19 @@ function showEditForm(planId, runnerId) {
     <div class="ef-row">
       <div><label>Session type</label><select id="eft-type-${planId}">
         <option>Easy Run</option><option>Tempo Run</option><option>Interval Training</option>
-        <option>Long Run</option><option>Recovery Run</option><option>Cross Training</option><option>Rest</option>
+        <option>Fartlek</option><option>Long Run</option><option>Recovery Run</option>
+        <option>Cross Training</option><option>Rest</option>
       </select></div>
-      <div><label>Distance (km)</label><input id="eft-dist-${planId}" type="number" step="0.5" placeholder="0"></div>
+      <div>
+        <label>
+          <span id="eft-dist-lbl-${planId}">Distance (km)</span>
+          <span style="margin-left:8px;font-size:11px;color:#6366f1;cursor:pointer" onclick="toggleTimeBased('eft-${planId}')">
+            switch to <span id="eft-mode-hint-${planId}">time</span>
+          </span>
+        </label>
+        <input id="eft-dist-${planId}" type="number" step="0.5" placeholder="0" style="display:block">
+        <input id="eft-dur-${planId}"  type="number" step="5"   placeholder="mins" style="display:none">
+      </div>
     </div>
     <div class="ef-row">
       <div><label>Intensity</label><select id="eft-int-${planId}">
@@ -1790,8 +1830,10 @@ async function savePlanEdit(planId, runnerId) {
   const i = document.getElementById(`eft-int-${planId}`)?.value;
   const r = document.getElementById(`eft-rpe-${planId}`)?.value;
   const n = document.getElementById(`eft-notes-${planId}`)?.value;
+  const dur = document.getElementById(`eft-dur-${planId}`)?.value;
   if (t) { fields.session_type = t; fields.day_type = t === 'Rest' ? 'Rest' : 'Run'; }
   if (d) fields.distance_km = d;
+  if (dur) fields.duration_min = dur;
   if (i) fields.intensity    = i;
   if (r) fields.rpe_target   = r;
   if (n !== undefined) fields.coach_notes = n;
@@ -1868,7 +1910,7 @@ function addPlanChatBubble(text, role, sessions = null, deleteFirst = false) {
   let sessionHtml = '';
   if (sessions && sessions.length > 0) {
     const rows = sessions.slice(0,8).map(s =>
-      `<tr><td>${s.date}</td><td>${s.session_type}</td><td>${s.distance_km||0}km</td><td>${s.intensity}</td></tr>`
+      `<tr><td>${s.date}</td><td>${s.session_type}</td><td>${s.duration_min && s.duration_min != '0' ? s.duration_min+'min' : (s.distance_km||0)+'km'}</td><td>${s.intensity}</td></tr>`
     ).join('');
     const more = sessions.length > 8 ? `<tr><td colspan="4" style="color:#aaa;text-align:center">+${sessions.length-8} more sessions</td></tr>` : '';
     sessionHtml = `<div class="plan-preview-box" style="margin-top:8px">
