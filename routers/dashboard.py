@@ -1213,10 +1213,12 @@ async function openPanel(runnerId, focusCompose = false) {
   renderTable(); // highlight selected row
 
   // Reset panel
+  stopHistoryPoll();
+  _lastMsgTimestamp = '';
   planChatHistory = [];
   document.getElementById('plan-chat').innerHTML = '';
-  updateComposeArea('today');
-  switchTab('today');
+  updateComposeArea(focusCompose ? 'history' : 'today');
+  switchTab(focusCompose ? 'history' : 'today');
   document.getElementById('today-content').innerHTML = '<div class="loading">Loading…</div>';
   document.getElementById('conv-list').innerHTML     = '<div class="loading">Loading…</div>';
   document.getElementById('profile-content').innerHTML = '<div class="loading">Loading…</div>';
@@ -1257,23 +1259,8 @@ async function openPanel(runnerId, focusCompose = false) {
   document.getElementById('today-content').innerHTML = todayHtml;
 
   // History tab
-  const convs = data.conversations || [];
-  if (convs.length === 0) {
-    document.getElementById('conv-list').innerHTML = '<p style="color:#aaa;font-size:13px">No conversation history yet.</p>';
-  } else {
-    document.getElementById('conv-list').innerHTML = convs.map(m => {
-      const isIn = m.direction === 'inbound';
-      return `<div class="bubble ${isIn?'in':'out'}">
-        ${m.message}
-        <div class="ts">${m.timestamp||''}</div>
-      </div>`;
-    }).join('');
-    // scroll to bottom
-    setTimeout(() => {
-      const cl = document.getElementById('conv-list');
-      cl.parentElement.scrollTop = cl.parentElement.scrollHeight;
-    }, 50);
-  }
+  renderConvs(data.conversations || []);
+  startHistoryPoll(runnerId);
 
   // Profile tab
   const inj = r.injuries && r.injuries !== 'None'
@@ -1325,11 +1312,75 @@ async function openPanel(runnerId, focusCompose = false) {
 }
 
 function closePanel() {
+  stopHistoryPoll();
   const panel = document.getElementById('panel');
   panel.classList.remove('open');
-  panel.style.removeProperty('width');   // clear any drag-set inline width
+  panel.style.removeProperty('width');
   activeRunner = null;
   renderTable();
+}
+
+// ── Chat history helpers ───────────────────────────────────────────────────────
+
+let _historyPollTimer = null;
+let _lastMsgTimestamp = '';
+
+function renderConvs(convs, scrollBottom = true) {
+  const el = document.getElementById('conv-list');
+  if (!el) return;
+  if (convs.length === 0) {
+    el.innerHTML = '<p style="color:#aaa;font-size:13px;padding:12px">No conversation history yet.</p>';
+    return;
+  }
+  el.innerHTML = convs.map(m => _bubbleHtml(m)).join('');
+  if (convs.length) _lastMsgTimestamp = convs[convs.length - 1].timestamp || '';
+  if (scrollBottom) _scrollConvBottom();
+}
+
+function appendBubble(m) {
+  const el = document.getElementById('conv-list');
+  if (!el) return;
+  // Remove the "no history" placeholder if present
+  if (el.querySelector('p')) el.innerHTML = '';
+  el.insertAdjacentHTML('beforeend', _bubbleHtml(m));
+  _scrollConvBottom();
+}
+
+function _bubbleHtml(m) {
+  const isIn = m.direction === 'inbound';
+  const txt  = (m.message || '').replace(/</g, '&lt;').replace(/\n/g, '<br>');
+  return `<div class="bubble ${isIn?'in':'out'}">
+    ${txt}
+    <div class="ts">${m.timestamp||''}</div>
+  </div>`;
+}
+
+function _scrollConvBottom() {
+  setTimeout(() => {
+    const pane = document.getElementById('tab-history');
+    if (pane) pane.scrollTop = pane.scrollHeight;
+  }, 30);
+}
+
+function startHistoryPoll(runnerId) {
+  stopHistoryPoll();
+  _historyPollTimer = setInterval(async () => {
+    if (!activeRunner || activeRunner.runner_id !== runnerId) { stopHistoryPoll(); return; }
+    try {
+      const res  = await fetch(`/dashboard/api/runner/${runnerId}`);
+      const data = await res.json();
+      const convs = data.conversations || [];
+      if (!convs.length) return;
+      const latest = convs[convs.length - 1].timestamp || '';
+      if (latest !== _lastMsgTimestamp) {
+        renderConvs(convs, true);
+      }
+    } catch(_) {}
+  }, 6000);   // poll every 6 seconds
+}
+
+function stopHistoryPoll() {
+  if (_historyPollTimer) { clearInterval(_historyPollTimer); _historyPollTimer = null; }
 }
 
 const TAB_ORDER = ['today','history','plan','profile'];
@@ -1375,14 +1426,19 @@ async function sendMessage() {
 
   const btn = document.getElementById('send-btn');
   btn.disabled = true; btn.textContent = 'Sending…';
+  textarea.value = '';
+
+  // Optimistically show the bubble immediately
+  switchTab('history');
+  appendBubble({direction:'outbound', message: msg, timestamp: new Date().toLocaleString('en-IN')});
+
   try {
     const res  = await fetch('/dashboard/api/message', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({runner_id: rid, message: msg})
     });
     const data = await res.json();
-    if (data.ok) { toast('Message sent via WhatsApp ✓'); textarea.value = ''; openPanel(rid); }
-    else toast(data.error || 'Failed to send', true);
+    if (!data.ok) toast(data.error || 'Failed to send', true);
   } catch(e) { toast('Error: ' + e.message, true); }
   finally { btn.disabled = false; btn.textContent = 'Send WhatsApp'; }
 }
