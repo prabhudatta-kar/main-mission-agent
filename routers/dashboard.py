@@ -1427,7 +1427,7 @@ function updateComposeArea(tabName) {
         <button class="note-btn" id="note-btn" onclick="addNote()">Save as Instruction</button>
         <button id="handback-btn" title="Hand back to AI agent" onclick="handbackToAI()"
           style="background:#f0fdf4;color:#16a34a;border:1px solid #86efac;border-radius:8px;padding:8px 12px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap">
-          🤖 Hand to AI
+          🤖 Handover to AI
         </button>
       </div>`;
   }
