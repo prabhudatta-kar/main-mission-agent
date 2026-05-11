@@ -226,6 +226,9 @@ class FirebaseClient:
         })
         return plan_id
 
+    def get_plan(self, plan_id: str) -> dict:
+        return _doc(self._col("training_plans").document(plan_id).get())
+
     def update_plan(self, plan_id: str, fields: dict):
         self._col("training_plans").document(plan_id).update(fields)
 

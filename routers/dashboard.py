@@ -135,6 +135,36 @@ async def api_send_message(req: MessageReq):
     return {"ok": True}
 
 
+@router.post("/api/plan/{plan_id}/remind")
+async def api_remind_session(plan_id: str):
+    """Send a WhatsApp reminder for a specific session."""
+    plan = sheets.get_plan(plan_id)
+    if not plan:
+        return JSONResponse({"error": "Plan not found"}, status_code=404)
+    runner = sheets.get_runner(plan["runner_id"])
+    if not runner:
+        return JSONResponse({"error": "Runner not found"}, status_code=404)
+
+    first        = (runner.get("name") or "there").split()[0]
+    session_type = plan.get("session_type", "Run")
+    dist         = plan.get("distance_km", "")
+    duration     = plan.get("duration_min", "")
+    intensity    = plan.get("intensity", "")
+    coach_notes  = plan.get("coach_notes", "")
+    date_str     = plan.get("date", "")
+
+    metric = f"{dist}km" if dist and dist != "0" else (f"{duration}min" if duration and duration != "0" else "")
+    detail = f"{metric} at {intensity}" if metric and intensity else (metric or intensity)
+    notes_part = f"\n\n{coach_notes}" if coach_notes else ""
+
+    msg = f"Reminder: {session_type} today{', ' + detail if detail else ''}. {notes_part}".strip()
+
+    await whatsapp.send_text(runner["phone"], msg)
+    sheets.log_conversation(plan["runner_id"], runner.get("coach_id", ""),
+                            inbound="", outbound=msg, intent="session_reminder")
+    return {"ok": True, "message": msg}
+
+
 @router.post("/api/runner/{runner_id}/handback")
 async def api_handback(runner_id: str):
     """Coach hands control back to the AI agent."""
@@ -774,6 +804,7 @@ td small{display:block;font-size:11px;color:#999;margin-top:2px}
 .sc-btn{background:none;border:1px solid #e5e7eb;border-radius:4px;padding:2px 6px;font-size:11px;cursor:pointer;color:#555}
 .sc-btn:hover{border-color:#00a884;color:#00a884}
 .sc-btn.del:hover{border-color:#e53935;color:#e53935}
+.sc-btn.remind:hover{border-color:#f97316;color:#f97316}
 .week-header{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#aaa;margin:12px 0 6px;padding-bottom:4px;border-bottom:1px solid #eee}
 
 /* Generate modal overlay */
@@ -1509,6 +1540,19 @@ function toggleTimeBased(prefix) {
   if (hintEl) hintEl.textContent = isTime ? 'time' : 'distance';
 }
 
+async function remindSession(planId, runnerId, btn) {
+  btn.disabled = true; btn.textContent = '…';
+  try {
+    const res = await fetch(`/dashboard/api/plan/${planId}/remind`, {method: 'POST'});
+    const d   = await res.json();
+    if (d.ok) { toast('Reminder sent via WhatsApp ✓'); btn.textContent = '✓'; }
+    else { toast(d.error || 'Failed', true); btn.textContent = '📣'; btn.disabled = false; }
+  } catch(e) {
+    toast('Error: ' + e.message, true);
+    btn.textContent = '📣'; btn.disabled = false;
+  }
+}
+
 async function handbackToAI() {
   if (!activeRunner) return;
   const rid = activeRunner.runner_id;
@@ -1798,6 +1842,7 @@ function renderPlanList(plans, runnerId) {
           <div id="ef-${pid}"></div>
         </div>
         <div class="sc-actions">
+          <button class="sc-btn remind" onclick="remindSession('${pid}','${runnerId}',this)" title="Send WhatsApp reminder for this session">📣</button>
           <button class="sc-btn" onclick="showEditForm('${pid}','${runnerId}')">Edit</button>
           <button class="sc-btn del" onclick="deletePlan('${pid}','${runnerId}')">✕</button>
         </div>
