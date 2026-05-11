@@ -1357,9 +1357,9 @@ function _bubbleHtml(m) {
 
 function _scrollConvBottom() {
   setTimeout(() => {
-    const pane = document.getElementById('tab-history');
-    if (pane) pane.scrollTop = pane.scrollHeight;
-  }, 30);
+    const body = document.querySelector('.panel-body');
+    if (body) body.scrollTop = body.scrollHeight;
+  }, 50);
 }
 
 function startHistoryPoll(runnerId) {

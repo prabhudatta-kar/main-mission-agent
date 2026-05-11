@@ -7,6 +7,26 @@ from utils.intent_classifier import classify_intent
 from utils.escalation import should_escalate, notify_coach
 
 
+def _coach_recently_messaged(recent_messages: list, window_minutes: int = 30) -> bool:
+    """True if the coach sent a manual message within the last window_minutes."""
+    from datetime import datetime
+    cutoff = (datetime.now().timestamp() - window_minutes * 60)
+    for m in reversed(recent_messages):
+        if m.get("direction") != "outbound":
+            continue
+        if m.get("message_type") == "coach_direct":
+            try:
+                ts = datetime.strptime(m["timestamp"], "%Y-%m-%d %H:%M:%S").timestamp()
+                if ts >= cutoff:
+                    return True
+            except Exception:
+                pass
+        # Any inbound message resets the takeover (runner was already chatting with AI)
+        if m.get("direction") == "inbound":
+            return False
+    return False
+
+
 def _no_plan_response(runner_data: dict) -> str:
     first = (runner_data.get("name") or "").split()[0]
     if not first or first == "New":
@@ -45,6 +65,12 @@ async def generate_runner_response(sender: dict, message: str) -> dict:
     # Merge memory into runner_data so template selector can use it
     if memory:
         runner_data = {**runner_data, "_memory": memory}
+
+    # Coach takeover: if coach sent a manual message in the last 30 min, stay silent
+    if _coach_recently_messaged(recent_messages):
+        logger.info(f"Coach takeover active for {runner_id} — AI staying silent")
+        sheets.log_conversation(runner_id, coach_id, message, "", "coach_takeover")
+        return {"response": "", "intent": "coach_takeover"}
 
     intent = classify_intent(message)
 
@@ -122,6 +148,9 @@ Return JSON:
 async def handle_runner_message(sender: dict, message: str):
     """Full runner pipeline including WhatsApp send and escalation check."""
     result = await generate_runner_response(sender, message)
+    if not result["response"]:
+        return   # coach takeover or awaiting plan — stay silent
+
     runner_data = sender["data"]
 
     if should_escalate(result["intent"], message, runner_data):
