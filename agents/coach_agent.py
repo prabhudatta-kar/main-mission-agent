@@ -1,3 +1,5 @@
+import logging
+
 from integrations.firebase_db import sheets
 from integrations.whatsapp import whatsapp
 from integrations.llm import llm
@@ -5,6 +7,8 @@ from agents.prompts import build_runner_prompt
 from agents.template_selector import select_template_response
 from utils.intent_classifier import classify_intent
 from utils.escalation import should_escalate, notify_coach
+
+logger = logging.getLogger(__name__)
 
 
 def _coach_recently_messaged(recent_messages: list, window_minutes: int = 30) -> bool:
@@ -25,6 +29,27 @@ def _coach_recently_messaged(recent_messages: list, window_minutes: int = 30) ->
         if m.get("direction") == "inbound":
             return False
     return False
+
+
+def _log_inbound_only(runner_id: str, coach_id: str, message: str):
+    """Log the runner's inbound message without creating an outbound record."""
+    import uuid
+    from datetime import datetime
+    import pytz
+    ts = datetime.now(pytz.timezone("Asia/Kolkata")).strftime("%Y-%m-%d %H:%M:%S")
+    log_id = f"LOG_{str(uuid.uuid4())[:6].upper()}"
+    sheets._col("conversations").document(log_id).set({
+        "log_id":            log_id,
+        "timestamp":         ts,
+        "runner_id":         runner_id,
+        "coach_id":          coach_id,
+        "direction":         "inbound",
+        "message":           message,
+        "message_type":      "coach_takeover",
+        "handled_by":        "coach",
+        "escalated":         False,
+        "escalation_reason": "",
+    })
 
 
 def _no_plan_response(runner_data: dict) -> str:
@@ -69,7 +94,7 @@ async def generate_runner_response(sender: dict, message: str) -> dict:
     # Coach takeover: if coach sent a manual message in the last 30 min, stay silent
     if _coach_recently_messaged(recent_messages):
         logger.info(f"Coach takeover active for {runner_id} — AI staying silent")
-        sheets.log_conversation(runner_id, coach_id, message, "", "coach_takeover")
+        _log_inbound_only(runner_id, coach_id, message)
         return {"response": "", "intent": "coach_takeover"}
 
     intent = classify_intent(message)
