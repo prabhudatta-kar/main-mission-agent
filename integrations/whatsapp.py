@@ -66,3 +66,38 @@ class WhatsAppClient:
 
 
 whatsapp = WhatsAppClient()
+
+
+async def send_runner_message(runner: dict, message: str):
+    """
+    Send a proactive message to a runner.
+    Uses free-form text if within the 24h session window,
+    otherwise falls back to the mm_question_general approved template.
+
+    Use this for ALL proactive sends (plan summaries, reminders, coach
+    direct messages). Do NOT use it for replies to inbound messages —
+    those are always within the window.
+    """
+    if not message or not message.strip():
+        return
+
+    from integrations.firebase_db import sheets as _sheets
+
+    phone     = runner.get("phone", "")
+    runner_id = runner.get("runner_id", "")
+    first     = (runner.get("name") or "there").split()[0]
+    if first == "New":
+        first = "there"
+
+    if _sheets.is_within_session_window(runner_id):
+        await whatsapp.send_text(phone, message)
+    else:
+        # Session expired — use mm_question_general as generic fallback.
+        # Template body: "{first_name}, {answer}"
+        # Trim message to 1024 chars (WhatsApp template limit).
+        await whatsapp.send_template(
+            phone=phone,
+            template_name="mm_question_general",
+            variables={"first_name": first, "answer": message[:1024]},
+        )
+        logger.info(f"Used template fallback for {phone} (session window expired)")

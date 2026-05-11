@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from typing import List
 
 from integrations.firebase_db import sheets
-from integrations.whatsapp import whatsapp
+from integrations.whatsapp import whatsapp, send_runner_message
 from integrations.llm import llm
 
 router = APIRouter(prefix="/dashboard")
@@ -127,7 +127,7 @@ async def api_send_message(req: MessageReq):
     runner = sheets.get_runner(req.runner_id)
     if not runner:
         return JSONResponse({"error": "Runner not found"}, status_code=404)
-    await whatsapp.send_text(runner["phone"], req.message)
+    await send_runner_message(runner, req.message)
     sheets.log_conversation(
         req.runner_id, runner.get("coach_id",""),
         inbound="",  outbound=req.message, intent="coach_direct"
@@ -164,7 +164,7 @@ async def api_remind_session(plan_id: str):
 
     msg = f"Reminder: {session_type} today{', ' + detail if detail else ''}. {notes_part}".strip()
 
-    await whatsapp.send_text(runner["phone"], msg)
+    await send_runner_message(runner, msg)
     sheets.log_conversation(plan["runner_id"], runner.get("coach_id", ""),
                             inbound="", outbound=msg, intent="session_reminder")
     return {"ok": True, "message": msg}
@@ -387,7 +387,7 @@ async def _notify_plan_created(runner_id: str, sessions: list):
             + f"\n\nReply with any questions — we'll adjust if needed."
         )
 
-        await whatsapp.send_text(phone, msg)
+        await send_runner_message(runner, msg)
         logger.info(f"Plan summary sent to runner {runner_id}")
     except Exception as e:
         logger.error(f"Failed to send plan summary to {runner_id}: {e}")

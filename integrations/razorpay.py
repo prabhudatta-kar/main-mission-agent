@@ -7,7 +7,7 @@ import httpx
 
 from config.settings import APP_URL, RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET, RAZORPAY_PLAN_ID, RAZORPAY_WEBHOOK_SECRET
 from integrations.firebase_db import sheets
-from integrations.whatsapp import whatsapp
+from integrations.whatsapp import whatsapp, send_runner_message
 
 logger = logging.getLogger(__name__)
 
@@ -167,15 +167,7 @@ async def _send_payment_confirmation(runner: dict):
         f"Message here anytime if you have questions."
     )
 
-    # Prefer free-form text if within 24h session window, otherwise log a warning
-    # (payment usually happens minutes after onboarding, so session should be open)
-    if sheets.is_within_session_window(runner.get("runner_id", "")):
-        await whatsapp.send_text(phone, msg)
-    else:
-        # Session expired — send anyway and let Wati decide
-        await whatsapp.send_text(phone, msg)
-        logger.warning(f"Payment confirmation sent outside session window for {phone} — may need template")
-
+    await send_runner_message(runner, msg)
     logger.info(f"Payment confirmation sent to {phone}")
 
 
