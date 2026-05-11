@@ -9,7 +9,9 @@ import json
 import logging
 import re
 
+from agents.coaching_kb import get_coaching_context
 from agents.prompt_store import get_prompt
+from integrations.firebase_db import sheets
 from integrations.llm import llm
 from integrations.strava import STRAVA_ACTIVITY_RE, fetch_strava_context
 from templates.catalog import TEMPLATES, fill_template
@@ -102,7 +104,8 @@ _CREATIVE_DESCRIPTIONS = {
 }
 
 async def _fill_creative_vars(
-    needed_vars: set, runner: dict, plan, message: str, base_vars: dict, history: list = None
+    needed_vars: set, runner: dict, plan, message: str, base_vars: dict,
+    history: list = None, intent: str = "question"
 ) -> dict:  # noqa: C901
     """Ask LLM for only the variables that can't come from data."""
     if not needed_vars:
@@ -170,9 +173,15 @@ async def _fill_creative_vars(
         .replace("{descriptions}",  json.dumps(descriptions, indent=2))
     )
 
+    # Inject relevant coaching KB sections based on intent + message content
+    coaching_ctx = get_coaching_context(intent, message)
+    system_msg = get_prompt("creative_vars_system")
+    if coaching_ctx:
+        system_msg = f"{system_msg}\n\n{coaching_ctx}"
+
     try:
         raw = await llm.complete([
-            {"role": "system", "content": get_prompt("creative_vars_system")},
+            {"role": "system", "content": system_msg},
             {"role": "user",   "content": user_prompt},
         ])
         raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
@@ -204,7 +213,7 @@ async def select_template_response(
     already_filled = required & set(base.keys())
     needs_llm = required - already_filled
 
-    creative = await _fill_creative_vars(needs_llm, runner, plan, message, base, history=history)
+    creative = await _fill_creative_vars(needs_llm, runner, plan, message, base, history=history, intent=intent)
     all_vars = {**base, **creative}
 
     try:
