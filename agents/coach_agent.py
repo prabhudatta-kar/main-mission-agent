@@ -13,6 +13,30 @@ from utils.intent_classifier import classify_intent
 
 logger = logging.getLogger(__name__)
 
+# ── Conversation gating ────────────────────────────────────────────────────────
+
+_CLOSERS = {
+    "ok", "okay", "k", "kk", "thanks", "thank you", "thx", "ty",
+    "got it", "cool", "alright", "sure", "great", "noted",
+    "will do", "done", "fine", "sounds good", "perfect", "yep", "yup",
+    "👍", "👌", "✅", "🙏", "roger", "understood", "noted",
+}
+
+_GREETINGS = {
+    "hi", "hello", "hey", "hiya", "howdy", "sup", "yo",
+    "good morning", "good evening", "good afternoon", "morning", "evening",
+}
+
+
+def _is_conversation_closer(message: str) -> bool:
+    cleaned = message.strip().lower().rstrip("!.").strip()
+    return cleaned in _CLOSERS
+
+
+def _is_greeting(message: str) -> bool:
+    cleaned = message.strip().lower().rstrip("!.,").strip()
+    return cleaned in _GREETINGS
+
 
 def _coach_recently_messaged(recent_messages: list, window_minutes: int = 30) -> bool:
     """True if coach has manual control and hasn't handed back to AI."""
@@ -128,6 +152,15 @@ async def _generate_llm_response(runner: dict, plan, history: list,
     if rules_text:
         system_msg += f"\n\nCOACH'S RULES — override everything above:\n{rules_text}"
 
+    # Behavioural guardrails — always appended, not editable from Firebase
+    system_msg += """
+
+CONVERSATION RULES:
+- Do not repeat advice or concerns from your previous message. If you already mentioned knee pain, hydration, or any specific tip, skip it this time unless the runner raises it again.
+- If the runner asks about medication, supplements, injections, or anything medical — do not give an opinion. Say it's worth checking with their coach or doctor directly.
+- When answering questions about nutrition, pacing, or training science, use the coaching context provided — do not default to generic internet advice.
+- Keep replies to 2-3 sentences maximum. If the answer is one sentence, that is fine."""
+
 
     # ── Runner context ─────────────────────────────────────────────────────────
     try:
@@ -211,6 +244,17 @@ async def generate_runner_response(sender: dict, message: str) -> dict:
             response = _no_plan_response(runner_data)
             sheets.log_conversation(runner_id, coach_id, message, response, "awaiting_plan")
             return {"response": response, "intent": "awaiting_plan"}
+
+    # Conversation closer — don't reply, avoid the "Ok" spam loop
+    if _is_conversation_closer(message):
+        sheets.log_conversation(runner_id, coach_id, message, "", "conversation_close")
+        return {"response": "", "intent": "conversation_close"}
+
+    # Bare greeting — respond naturally, don't dump plan data
+    if _is_greeting(message):
+        response = "Hey! What's on your mind?"
+        sheets.log_conversation(runner_id, coach_id, message, response, "greeting")
+        return {"response": response, "intent": "greeting"}
 
     intent = classify_intent(message)
 
