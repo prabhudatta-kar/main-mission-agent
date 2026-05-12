@@ -50,19 +50,17 @@ async def handle_incoming(data: dict):
     if sender["type"] == "runner":
         runner_data = sender["data"]
 
-        # Image message — handle separately regardless of onboarding state
+        # Image message — Wati sends URL in data["data"], caption in data["text"]
         if is_image:
-            img      = data.get("image") or data.get("media") or {}
-            media_id = img.get("id", "") or img.get("mediaId", "") or data.get("mediaId", "")
-            caption  = img.get("caption", "") or data.get("caption", "") or ""
-            logger.info(f"Image message: media_id={media_id!r} caption={caption!r}")
-            if media_id and str(runner_data.get("onboarded", "TRUE")).upper() == "TRUE":
-                await handle_runner_image(sender, media_id, caption)
+            image_url = data.get("data", "") if isinstance(data.get("data"), str) else ""
+            caption   = message  # data["text"] already extracted as message above
+            logger.info(f"Image message: url={image_url!r} caption={caption!r}")
+            if image_url and str(runner_data.get("onboarded", "TRUE")).upper() == "TRUE":
+                await handle_runner_image(sender, image_url, caption)
                 return
-            # During onboarding or no media_id — treat as text if there's a caption
+            # No URL or during onboarding — fall through as text if caption exists
             if not caption:
                 return
-            message = caption
 
         if str(runner_data.get("onboarded", "TRUE")).upper() == "FALSE":
             response = await _run_onboarding(normalized, sender, message)

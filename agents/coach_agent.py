@@ -324,22 +324,33 @@ Return JSON:
         return "Tell me more about the race you signed up for and I'll add it to your schedule."
 
 
-async def handle_runner_image(sender: dict, media_id: str, caption: str = ""):
+async def handle_runner_image(sender: dict, image_url: str, caption: str = ""):
     """
     Runner sent an image (workout screenshot, Garmin/Strava/Apple Watch, etc.).
-    Downloads from Wati, sends to GPT-4o vision, extracts stats + replies naturally.
+    Downloads from Wati URL, sends to GPT-4o vision, extracts stats + replies naturally.
     """
     import base64
+    import httpx
+    from config.settings import WATI_API_TOKEN
+
     runner_id   = sender["id"]
     coach_id    = sender["coach_id"]
     runner_data = sheets.get_runner(runner_id) or sender.get("data", {})
     phone       = runner_data.get("phone", "")
 
     try:
-        image_bytes, mime_type = await whatsapp.get_media_bytes(media_id)
-        image_b64 = base64.b64encode(image_bytes).decode()
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                image_url,
+                headers={"Authorization": f"Bearer {WATI_API_TOKEN}"},
+                timeout=20,
+                follow_redirects=True,
+            )
+            resp.raise_for_status()
+            mime_type = resp.headers.get("content-type", "image/jpeg").split(";")[0].strip()
+            image_b64 = base64.b64encode(resp.content).decode()
     except Exception as e:
-        logger.error(f"Failed to download media {media_id} for {runner_id}: {e}")
+        logger.error(f"Failed to download image {image_url} for {runner_id}: {e}")
         await whatsapp.send_text(phone, "Got your image but couldn't read it — can you share the key stats as text?")
         return
 
@@ -367,18 +378,18 @@ async def handle_runner_image(sender: dict, media_id: str, caption: str = ""):
         logger.error(f"Vision call failed for {runner_id}: {e}")
         response = "Got your workout — can you tell me the key numbers (distance, pace, HR) so I can give you proper feedback?"
 
-    # Log with media_id so dashboard can display the image
+    # Log with image_url so dashboard can display the image
     sheets.log_conversation(
         runner_id, coach_id,
         inbound=caption or "[image]",
         outbound=response,
         intent="image_upload",
-        media_id=media_id,
+        media_id=image_url,   # store the URL in the media_id field
         media_type="image",
     )
 
     await whatsapp.send_text(phone, response)
-    logger.info(f"Image processed for {runner_id} (media={media_id})")
+    logger.info(f"Image processed for {runner_id}")
 
 
 async def handle_runner_message(sender: dict, message: str):

@@ -608,16 +608,16 @@ async def api_delete_runner(runner_id: str):
 
 # ── Media proxy ───────────────────────────────────────────────────────────────
 
-@router.get("/api/media/{media_id}")
-async def api_media_proxy(media_id: str):
-    """Proxy Wati media downloads so dashboard can display images without exposing the API token."""
+@router.get("/api/media/proxy")
+async def api_media_proxy(url: str):
+    """Proxy Wati image URLs so the dashboard can display them without exposing the API token."""
     from fastapi.responses import Response
     import httpx
-    from config.settings import WATI_API_URL, WATI_API_TOKEN
+    from config.settings import WATI_API_TOKEN
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.get(
-                f"{WATI_API_URL}/api/v1/getMedia/{media_id}",
+                url,
                 headers={"Authorization": f"Bearer {WATI_API_TOKEN}"},
                 timeout=15,
                 follow_redirects=True,
@@ -627,7 +627,7 @@ async def api_media_proxy(media_id: str):
             return Response(content=resp.content, media_type=mime,
                             headers={"Cache-Control": "max-age=86400"})
     except Exception as e:
-        logger.error(f"Media proxy failed for {media_id}: {e}")
+        logger.error(f"Media proxy failed for {url}: {e}")
         return Response(status_code=404)
 
 
@@ -1543,7 +1543,7 @@ function _bubbleHtml(m) {
   const txt  = (m.message || '').replace(/</g,'&lt;').replace(/\n/g,'<br>');
   let content = txt;
   if (m.media_id && m.media_type === 'image') {
-    const imgSrc = `/dashboard/api/media/${m.media_id}`;
+    const imgSrc = `/dashboard/api/media/proxy?url=${encodeURIComponent(m.media_id)}`;
     const caption = txt && txt !== '[image]' ? `<div style="margin-top:6px;font-size:12px;color:#555">${txt}</div>` : '';
     content = `<img src="${imgSrc}" style="max-width:220px;border-radius:8px;display:block;cursor:pointer"
       onclick="window.open('${imgSrc}','_blank')" onerror="this.style.display='none'">${caption}`;
