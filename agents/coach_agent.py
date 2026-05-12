@@ -368,9 +368,9 @@ async def handle_runner_image(sender: dict, image_url: str, caption: str = ""):
         "(plain text, no opener with runner's name, no generic advice)\n"
         "  'stats': object of every metric you can read from the image — distance, pace, HR, "
         "splits, zones, elevation, cadence, power, calories, app name, etc.\n"
-        "  'summary': one paragraph in plain English describing ALL the extracted data completely — "
-        "this will be stored as context so the runner can ask follow-up questions and get accurate answers. "
-        "Include every number you extracted."
+        "  'summary': 2-3 sentences in plain English covering ALL extracted numbers — "
+        "distance, pace, HR, splits, zones, anything visible. Be specific with numbers. "
+        "This is stored as context for follow-up questions so completeness matters more than brevity."
     )
     text_prompt = (
         f"Runner: {first}" +
@@ -379,18 +379,36 @@ async def handle_runner_image(sender: dict, image_url: str, caption: str = ""):
         ". Extract everything visible and write the coaching reply."
     )
 
-    response = "Got your workout — can you share the key numbers (distance, pace, HR) so I can give proper feedback?"
+    response = ""
     stats: dict = {}
     summary = ""
     try:
-        raw = await llm.complete_with_image(system, text_prompt, image_b64, mime_type, max_tokens=600)
+        raw = await llm.complete_with_image(system, text_prompt, image_b64, mime_type, max_tokens=2000)
         raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-        parsed   = json.loads(raw)
-        response = parsed.get("response", response)
-        stats    = parsed.get("stats", {})
-        summary  = parsed.get("summary", "")
+        try:
+            parsed   = json.loads(raw)
+            response = parsed.get("response", "")
+            stats    = parsed.get("stats", {})
+            summary  = parsed.get("summary", "")
+        except json.JSONDecodeError as je:
+            logger.warning(f"Vision JSON truncated for {runner_id} ({je}) — extracting response field")
+            # JSON truncated mid-string — pull the response value before the cut
+            import re
+            m = re.search(r'"response"\s*:\s*"((?:[^"\\]|\\.)*)', raw)
+            if m:
+                response = m.group(1).replace('\\"', '"').replace('\\n', '\n').rstrip('\\')
+            # Try to get whatever stats came through before truncation
+            ms = re.search(r'"stats"\s*:\s*(\{[^}]*)', raw)
+            if ms:
+                try:
+                    stats = json.loads(ms.group(1) + "}")
+                except Exception:
+                    pass
     except Exception as e:
-        logger.error(f"Vision call/parse failed for {runner_id}: {e}")
+        logger.error(f"Vision call failed for {runner_id}: {e}")
+
+    if not response:
+        response = "Solid effort — I can see the stats. If you want me to compare against your plan, let me know what the key numbers were."
 
     # Attach actuals to the matching training plan
     plan = sheets.get_todays_plan(runner_id) or sheets.get_recent_sent_plan(runner_id)
