@@ -1153,7 +1153,7 @@ td small{display:block;font-size:11px;color:#999;margin-top:2px}
   <h1>Main Mission — Coach Dashboard</h1>
   <div class="hdr-meta">
     <span id="hdr-date">—</span>
-    <button class="manage-ai-btn" onclick="openBulkPlan()" style="background:#0891b2">👥 Group Plan</button>
+    <button class="manage-ai-btn" onclick="openGroups()" style="background:#0891b2">👥 Groups</button>
     <button class="manage-ai-btn" onclick="openManageAI()">⚙ Manage AI</button>
     <button class="refresh-btn" onclick="loadData()">↻ Refresh</button>
     <a href="/sysobservations" style="color:#8696a0;text-decoration:none;font-size:12px">🔍 System</a>
@@ -1309,7 +1309,6 @@ td small{display:block;font-size:11px;color:#999;margin-top:2px}
     <div class="mai-tabs">
       <div class="mai-tab active" onclick="switchMAITab('personality')">🧠 AI Personality</div>
       <div class="mai-tab" onclick="switchMAITab('rules')">📋 Rules &amp; Memory</div>
-      <div class="mai-tab" onclick="switchMAITab('groups')">👥 Groups</div>
     </div>
     <div class="mai-body">
       <!-- Personality tab -->
@@ -1361,12 +1360,28 @@ td small{display:block;font-size:11px;color:#999;margin-top:2px}
       </div>
 
       <!-- Groups tab -->
-      <div class="mai-pane" id="mai-groups">
-        <div style="display:flex;align-items:center;gap:12px;flex-shrink:0">
-          <strong style="font-size:14px">Training Groups</strong>
-          <button class="btn-purple" onclick="showCreateGroup()" style="padding:5px 14px;font-size:12px">+ New Group</button>
+    </div>
+    <div class="mai-ftr">
+      <button class="btn-secondary" onclick="closeManageAI()">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Groups Modal -->
+<div class="mai-overlay" id="grp-overlay" style="display:none" onclick="if(event.target===this)closeGroups()">
+  <div class="mai-modal">
+    <div class="mai-hdr">
+      <span style="font-size:22px">👥</span>
+      <h2 style="flex:1">Training Groups</h2>
+      <button class="manage-ai-btn" onclick="openBulkPlan()" style="background:#0891b2;margin-right:8px">📊 Group Plan</button>
+      <button class="close-btn" onclick="closeGroups()">✕</button>
+    </div>
+    <div class="mai-body">
+      <div class="mai-pane active" id="grp-pane" style="display:flex;flex-direction:column;gap:16px">
+        <div>
+          <p style="font-size:12px;color:#666;margin-bottom:10px">Groups are internal — runners never see them. Assign runners from their profile tab, then use Group Plan to generate bulk sessions.</p>
+          <button class="btn-purple" onclick="showCreateGroup()" style="padding:6px 16px;font-size:13px">+ New Group</button>
         </div>
-        <p style="font-size:12px;color:#666;margin-top:-8px">Groups are internal — runners never see them. Use them to bulk-assign workouts with the Group Plan button.</p>
         <div id="mai-group-create" style="display:none;background:#f9f9f9;border-radius:10px;padding:14px;gap:10px;flex-direction:column">
           <div style="display:flex;gap:8px;flex-wrap:wrap">
             <input id="gc-name" type="text" placeholder="Group name (e.g. Elite, Beginner)"
@@ -1396,7 +1411,7 @@ td small{display:block;font-size:11px;color:#999;margin-top:2px}
       </div>
     </div>
     <div class="mai-ftr">
-      <button class="btn-secondary" onclick="closeManageAI()">Close</button>
+      <button class="btn-secondary" onclick="closeGroups()">Close</button>
     </div>
   </div>
 </div>
@@ -2186,6 +2201,17 @@ function toast(msg, isError = false) {
 
 let selectedGroupColor = '#2563eb';
 
+async function openGroups() {
+  if (!coaches.length) { toast('No coaches found', true); return; }
+  maiCoachId = coaches[0].id;
+  document.getElementById('grp-overlay').style.display = 'flex';
+  await loadGroups();
+}
+
+function closeGroups() {
+  document.getElementById('grp-overlay').style.display = 'none';
+}
+
 function selectGroupColor(c) {
   selectedGroupColor = c;
   document.getElementById('gc-color-val').value = c;
@@ -2314,6 +2340,7 @@ async function openBulkPlan() {
   if (!coaches.length) { toast('No coaches found', true); return; }
   const cid = coaches[0].id;
   document.getElementById('bulk-overlay').style.display = 'flex';
+  document.getElementById('grp-overlay').style.display = 'none';
   document.getElementById('bulk-date').value = new Date().toISOString().slice(0,10);
   document.getElementById('bulk-preview-section').style.display = 'none';
   document.getElementById('bulk-save-btn').style.display = 'none';
@@ -2460,10 +2487,9 @@ function closeManageAI() {
 }
 
 function switchMAITab(name) {
-  document.querySelectorAll('.mai-tab').forEach((t,i) => t.classList.toggle('active', ['personality','rules','groups'][i] === name));
+  document.querySelectorAll('.mai-tab').forEach((t,i) => t.classList.toggle('active', ['personality','rules'][i] === name));
   document.querySelectorAll('.mai-pane').forEach(p => p.classList.remove('active'));
   document.getElementById('mai-' + name).classList.add('active');
-  if (name === 'groups') loadGroups();
 }
 
 async function loadPrompt() {
