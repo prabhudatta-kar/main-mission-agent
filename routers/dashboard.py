@@ -1434,11 +1434,58 @@ async function openPanel(runnerId, focusCompose = false) {
   // Today tab
   let todayHtml = '';
   if (p) {
+    const hasActuals = p.actual_distance || p.actual_pace || p.actual_hr;
+    const plannedDist = p.distance_km && p.distance_km !== '0' ? `${p.distance_km}km` : '—';
+    const plannedRpe  = p.rpe_target || '—';
+
     todayHtml += `<div class="plan-card">
-      <div class="plan-title">${p.session_type||'—'} — ${p.distance_km||0}km</div>
-      <div class="plan-row">🎯 Intensity: ${p.intensity||'—'} &nbsp;·&nbsp; RPE ${p.rpe_target||'—'}</div>
-      <div class="plan-notes">${p.coach_notes||'No specific notes'}</div>
+      <div class="plan-title">${p.session_type||'—'}</div>`;
+
+    if (hasActuals) {
+      // Planned vs Actual comparison table
+      const rows = [
+        ['Distance', plannedDist, p.actual_distance ? `${p.actual_distance}km` : null],
+        ['Pace',     p.intensity || '—', p.actual_pace || null],
+        ['Avg HR',   '—',               p.actual_hr   ? `${p.actual_hr} bpm` : null],
+        ['Max HR',   '—',               p.actual_hr_max ? `${p.actual_hr_max} bpm` : null],
+        ['Duration', '—',               p.actual_duration_min ? `${p.actual_duration_min} min` : null],
+        ['Elevation','—',               p.actual_elevation_m ? `${p.actual_elevation_m}m` : null],
+        ['Cadence',  '—',               p.actual_cadence ? `${p.actual_cadence} spm` : null],
+        ['Calories', '—',               p.actual_calories ? `${p.actual_calories} kcal` : null],
+      ].filter(([, , a]) => a);
+
+      todayHtml += `<table style="width:100%;font-size:12px;margin:10px 0;border-collapse:collapse">
+        <thead><tr>
+          <th style="text-align:left;color:#888;padding:3px 6px;font-weight:600">Metric</th>
+          <th style="text-align:right;color:#888;padding:3px 6px;font-weight:600">Planned</th>
+          <th style="text-align:right;color:#00a884;padding:3px 6px;font-weight:600">Actual</th>
+        </tr></thead>
+        <tbody>${rows.map(([label, planned, actual]) =>
+          `<tr style="border-top:1px solid #f5f5f5">
+            <td style="padding:4px 6px;color:#555">${label}</td>
+            <td style="padding:4px 6px;text-align:right;color:#aaa">${planned}</td>
+            <td style="padding:4px 6px;text-align:right;font-weight:600">${actual}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>`;
+
+      if (p.actual_data_source) {
+        todayHtml += `<div style="font-size:11px;color:#aaa;margin-bottom:6px">via ${p.actual_data_source}</div>`;
+      }
+      if (p.actual_image_url) {
+        const proxyUrl = `/dashboard/api/media/proxy?url=${encodeURIComponent(p.actual_image_url)}`;
+        todayHtml += `<a href="${proxyUrl}" target="_blank">
+          <img src="${proxyUrl}" style="max-width:100%;border-radius:8px;margin:4px 0" onerror="this.style.display='none'">
+        </a>`;
+      }
+    } else {
+      todayHtml += `
+      <div class="plan-row">🎯 ${p.intensity||'—'} &nbsp;·&nbsp; ${plannedDist} &nbsp;·&nbsp; RPE ${plannedRpe}</div>`;
+    }
+
+    todayHtml += `<div class="plan-notes">${p.coach_notes||'No specific notes'}</div>
     </div>`;
+
     if (p.runner_feedback) {
       todayHtml += `<div class="feedback-card"><strong>Runner's feedback:</strong><br>${p.runner_feedback}</div>`;
     }

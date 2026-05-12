@@ -314,6 +314,52 @@ class FirebaseClient:
             result[plan["runner_id"]] = plan
         return result
 
+    def get_recent_sent_plan(self, runner_id: str, days: int = 3) -> dict:
+        """Find the most recently sent, incomplete run plan within the last N days.
+        Used to attach image workout stats to the correct plan."""
+        from datetime import date, timedelta
+        cutoff = (date.today() - timedelta(days=days)).isoformat()
+        plans  = self._stream(
+            self._col("training_plans").where("runner_id", "==", runner_id)
+        )
+        candidates = [
+            p for p in plans
+            if p.get("date", "") >= cutoff
+            and str(p.get("day_type", "")).lower() != "rest"
+            and str(p.get("sent", "")).upper() == "TRUE"
+            and str(p.get("completed", "")).upper() != "TRUE"
+        ]
+        if not candidates:
+            # Fall back to any sent plan in range (maybe already auto-marked complete)
+            candidates = [
+                p for p in plans
+                if p.get("date", "") >= cutoff
+                and str(p.get("day_type", "")).lower() != "rest"
+                and str(p.get("sent", "")).upper() == "TRUE"
+            ]
+        return max(candidates, key=lambda p: p.get("date", ""), default=None)
+
+    def update_plan_actuals(self, plan_id: str, actuals: dict):
+        """Write extracted workout stats back to the plan and mark completed."""
+        fields = {"completed": "TRUE"}
+        stat_map = {
+            "distance_km":    "actual_distance",
+            "duration_min":   "actual_duration_min",
+            "avg_pace":       "actual_pace",
+            "avg_hr":         "actual_hr",
+            "max_hr":         "actual_hr_max",
+            "elevation_m":    "actual_elevation_m",
+            "calories":       "actual_calories",
+            "cadence":        "actual_cadence",
+            "data_source":    "actual_data_source",
+            "image_url":      "actual_image_url",
+        }
+        for src, dst in stat_map.items():
+            if actuals.get(src) is not None:
+                fields[dst] = str(actuals[src])
+        self._col("training_plans").document(plan_id).update(fields)
+        logger.info(f"Plan {plan_id} updated with actuals: {list(fields.keys())}")
+
     def mark_plan_sent(self, plan_id: str):
         self._col("training_plans").document(plan_id).update({
             "sent": "TRUE",

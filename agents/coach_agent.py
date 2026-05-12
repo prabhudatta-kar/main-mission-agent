@@ -359,24 +359,41 @@ async def handle_runner_image(sender: dict, image_url: str, caption: str = ""):
 
     system = (
         "You are a running coach receiving a workout screenshot from a runner on WhatsApp. "
-        "Extract all visible workout stats (distance, time, pace, heart rate, elevation, "
-        "cadence, calories, power, splits — whatever is visible). "
-        "Then reply as a coach would: acknowledge the specific numbers, give one short "
-        "observation or piece of feedback based on what you see. "
-        "2-3 sentences max. Plain text. No markdown. Do not start with the runner's name."
+        "Extract all visible stats from the image (distance, duration, avg pace, avg HR, max HR, "
+        "elevation, calories, cadence, power, app/device name — whatever is visible). "
+        "Return ONLY valid JSON with exactly two keys:\n"
+        "  'response': 1-2 sentence coaching reply acknowledging the specific numbers (plain text, no name opener)\n"
+        "  'stats': object with these keys if visible — distance_km (number), duration_min (number), "
+        "avg_pace (string e.g. '5:52'), avg_hr (number), max_hr (number), elevation_m (number), "
+        "calories (number), cadence (number), data_source (string e.g. 'Garmin'). "
+        "Omit any key not visible in the image."
     )
     text_prompt = (
-        f"Runner: {first}"
-        + (f", training for {race}" if race else "")
-        + f". Caption with image: \"{caption}\"" if caption else ""
-        + ". Extract the stats and respond as their coach."
+        f"Runner: {first}" +
+        (f", training for {race}" if race else "") +
+        (f". Caption: \"{caption}\"" if caption else "") +
+        ". Extract stats and write coaching reply."
     )
 
+    response = "Got your workout — can you share the key numbers (distance, pace, HR) so I can give proper feedback?"
+    stats: dict = {}
     try:
-        response = await llm.complete_with_image(system, text_prompt, image_b64, mime_type)
+        raw = await llm.complete_with_image(system, text_prompt, image_b64, mime_type, max_tokens=400)
+        raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        parsed  = json.loads(raw)
+        response = parsed.get("response", response)
+        stats    = parsed.get("stats", {})
     except Exception as e:
-        logger.error(f"Vision call failed for {runner_id}: {e}")
-        response = "Got your workout — can you tell me the key numbers (distance, pace, HR) so I can give you proper feedback?"
+        logger.error(f"Vision call/parse failed for {runner_id}: {e}")
+
+    # Attach actuals to the matching training plan
+    plan = sheets.get_todays_plan(runner_id) or sheets.get_recent_sent_plan(runner_id)
+    if plan and str(plan.get("day_type", "")).lower() != "rest":
+        plan_id = plan.get("plan_id") or plan.get("_id", "")
+        if plan_id:
+            stats["image_url"] = image_url
+            sheets.update_plan_actuals(plan_id, stats)
+            logger.info(f"Actuals written to plan {plan_id} for runner {runner_id}")
 
     # Log with image_url so dashboard can display the image
     sheets.log_conversation(
@@ -384,7 +401,7 @@ async def handle_runner_image(sender: dict, image_url: str, caption: str = ""):
         inbound=caption or "[image]",
         outbound=response,
         intent="image_upload",
-        media_id=image_url,   # store the URL in the media_id field
+        media_id=image_url,
         media_type="image",
     )
 
