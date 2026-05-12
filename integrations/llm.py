@@ -31,6 +31,25 @@ class LLMClient:
             logger.error(f"OpenAI error: {e}")
             raise HTTPException(status_code=502, detail=f"LLM error: {str(e)}")
 
+    async def transcribe(self, audio_bytes: bytes, mime_type: str = "audio/ogg") -> str:
+        """Transcribe audio using OpenAI Whisper."""
+        import io
+        ext_map = {
+            "audio/ogg": "ogg", "audio/mp4": "mp4", "audio/mpeg": "mp3",
+            "audio/wav": "wav", "audio/webm": "webm", "audio/m4a": "m4a",
+            "audio/x-m4a": "m4a", "audio/aac": "m4a",
+        }
+        ext = ext_map.get(mime_type.split(";")[0].strip(), "ogg")
+        try:
+            response = await self._client.audio.transcriptions.create(
+                model="whisper-1",
+                file=(f"audio.{ext}", io.BytesIO(audio_bytes), mime_type),
+            )
+            return response.text.strip()
+        except Exception as e:
+            logger.error(f"Whisper transcription failed: {e}")
+            raise
+
     async def complete_with_image(self, system: str, text: str,
                                    image_b64: str, mime_type: str = "image/jpeg",
                                    max_tokens: int = 400) -> str:

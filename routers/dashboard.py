@@ -1921,7 +1921,13 @@ function _bubbleHtml(m) {
   const isIn = m.direction === 'inbound';
   const txt  = (m.message || '').replace(/</g,'&lt;').replace(/\n/g,'<br>');
   let content = txt;
-  if (m.media_id && m.media_type === 'image') {
+  if (m.media_type === 'audio') {
+    const transcript = txt.replace(/^\[Voice note\]\s*/i, '');
+    content = `<div style="display:flex;align-items:flex-start;gap:6px">
+      <span style="font-size:16px">🎤</span>
+      <div><div style="font-size:10px;color:#999;margin-bottom:2px">Voice note</div>${transcript}</div>
+    </div>`;
+  } else if (m.media_id && m.media_type === 'image') {
     const imgSrc = `/dashboard/api/media/proxy?url=${encodeURIComponent(m.media_id)}`;
     const caption = txt && txt !== '[image]' ? `<div style="margin-top:6px;font-size:12px;color:#555">${txt}</div>` : '';
     content = `<img src="${imgSrc}" style="max-width:220px;border-radius:8px;display:block;cursor:pointer"

@@ -3,7 +3,7 @@ import logging
 from config.settings import DEFAULT_COACH_ID, SUPPORT_EMAIL
 from integrations.firebase_db import sheets
 from integrations.whatsapp import whatsapp
-from agents.coach_agent import handle_runner_message, handle_coach_message, generate_runner_response, handle_runner_image
+from agents.coach_agent import handle_runner_message, handle_coach_message, generate_runner_response, handle_runner_image, handle_runner_audio
 from agents.onboarding_agent import is_onboarding, start_onboarding, handle_onboarding
 
 logger = logging.getLogger(__name__)
@@ -26,11 +26,15 @@ async def handle_incoming(data: dict):
         or (isinstance(data.get("media"), dict) and data["media"].get("url"))
     )
 
+    # Detect audio/voice note messages
+    is_audio = msg_type in ("audio", "voice", "ptt")
+
     if is_image:
         logger.info(f"Image webhook detected — type='{msg_type}' payload={data}")
+    elif is_audio:
+        logger.info(f"Audio/voice webhook detected — type='{msg_type}'")
     elif msg_type not in ("text", "message", ""):
         logger.info(f"Unknown webhook type='{msg_type}' — full payload: {data}")
-        # Don't process unknown non-image, non-text types
         if not phone:
             return
 
@@ -49,6 +53,16 @@ async def handle_incoming(data: dict):
 
     if sender["type"] == "runner":
         runner_data = sender["data"]
+
+        # Audio/voice note
+        if is_audio:
+            audio_url = data.get("data", "") if isinstance(data.get("data"), str) else ""
+            logger.info(f"Voice note: url={audio_url!r}")
+            if audio_url and str(runner_data.get("onboarded", "TRUE")).upper() == "TRUE":
+                await handle_runner_audio(sender, audio_url)
+                return
+            # No URL or during onboarding — ignore
+            return
 
         # Image message — Wati sends URL in data["data"], caption in data["text"]
         if is_image:

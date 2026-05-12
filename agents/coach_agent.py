@@ -282,7 +282,8 @@ CONVERSATION RULES:
         return "Let me flag this for your coach — they'll get back to you shortly."
 
 
-async def generate_runner_response(sender: dict, message: str) -> dict:
+async def generate_runner_response(sender: dict, message: str,
+                                   inbound_override: str = None) -> dict:
     runner_id   = sender["id"]
     coach_id    = sender["coach_id"]
     runner_data = sheets.get_runner(runner_id) or sender.get("data", {})
@@ -295,10 +296,14 @@ async def generate_runner_response(sender: dict, message: str) -> dict:
     if memory:
         runner_data = {**runner_data, "_memory": memory}
 
+    # inbound_override lets callers (e.g. voice notes) log a richer inbound
+    # string (e.g. "[Voice note] transcript") while the AI processes the raw text
+    log_inbound = inbound_override if inbound_override is not None else message
+
     # Coach takeover — stay silent
     if _coach_recently_messaged(recent_msgs):
         logger.info(f"Coach takeover active for {runner_id} — AI staying silent")
-        _log_inbound_only(runner_id, coach_id, message)
+        _log_inbound_only(runner_id, coach_id, log_inbound)
         return {"response": "", "intent": "coach_takeover"}
 
     # No plan yet — guard training-specific intents
@@ -306,18 +311,18 @@ async def generate_runner_response(sender: dict, message: str) -> dict:
         intent = classify_intent(message)
         if intent in ("feedback", "missed_session"):
             response = _no_plan_response(runner_data)
-            sheets.log_conversation(runner_id, coach_id, message, response, "awaiting_plan")
+            sheets.log_conversation(runner_id, coach_id, log_inbound, response, "awaiting_plan")
             return {"response": response, "intent": "awaiting_plan"}
 
     # Conversation closer — don't reply, avoid the "Ok" spam loop
     if _is_conversation_closer(message):
-        sheets.log_conversation(runner_id, coach_id, message, "", "conversation_close")
+        sheets.log_conversation(runner_id, coach_id, log_inbound, "", "conversation_close")
         return {"response": "", "intent": "conversation_close"}
 
     # Bare greeting — respond naturally, don't dump plan data
     if _is_greeting(message):
         response = "Hey! What's on your mind?"
-        sheets.log_conversation(runner_id, coach_id, message, response, "greeting")
+        sheets.log_conversation(runner_id, coach_id, log_inbound, response, "greeting")
         return {"response": response, "intent": "greeting"}
 
     intent = classify_intent(message)
@@ -325,25 +330,25 @@ async def generate_runner_response(sender: dict, message: str) -> dict:
     # Race update — dedicated handler
     if intent == "race_update":
         response = await _handle_race_update(runner_id, runner_data, message)
-        sheets.log_conversation(runner_id, coach_id, message, response, intent)
+        sheets.log_conversation(runner_id, coach_id, log_inbound, response, intent)
         return {"response": response, "intent": intent}
 
     # Plan intents — fetch real data, no LLM hallucination
     if intent == "plan_query":
         response = await _handle_plan_query(runner_data, todays_plan, message)
-        sheets.log_conversation(runner_id, coach_id, message, response, intent)
+        sheets.log_conversation(runner_id, coach_id, log_inbound, response, intent)
         return {"response": response, "intent": intent}
 
     if intent in ("plan_reschedule", "plan_tweak"):
         rtype    = "reschedule" if intent == "plan_reschedule" else "tweak"
         response = await _handle_plan_change_request(runner_data, todays_plan, message, rtype)
-        sheets.log_conversation(runner_id, coach_id, message, response, intent)
+        sheets.log_conversation(runner_id, coach_id, log_inbound, response, intent)
         return {"response": response, "intent": intent}
 
     # Everything else — free-form LLM response (24h window always open for inbound)
     response = await _generate_llm_response(runner_data, todays_plan, recent_msgs, message, intent)
 
-    sheets.log_conversation(runner_id, coach_id, message, response, intent)
+    sheets.log_conversation(runner_id, coach_id, log_inbound, response, intent)
     sheets.update_plan_feedback(runner_id, message)
 
     # Fire-and-forget: extract any profile data the runner may have mentioned
@@ -505,6 +510,56 @@ async def handle_runner_image(sender: dict, image_url: str, caption: str = ""):
 
     await whatsapp.send_text(phone, response)
     logger.info(f"Image processed for {runner_id}")
+
+
+async def handle_runner_audio(sender: dict, audio_url: str):
+    """
+    Runner sent a voice note — download, transcribe with Whisper,
+    then process the transcript through the normal conversation pipeline.
+    """
+    import httpx
+    from config.settings import WATI_API_TOKEN
+
+    runner_id   = sender["id"]
+    runner_data = sheets.get_runner(runner_id) or sender.get("data", {})
+    phone       = runner_data.get("phone", "")
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                audio_url,
+                headers={"Authorization": f"Bearer {WATI_API_TOKEN}"},
+                timeout=30,
+                follow_redirects=True,
+            )
+            resp.raise_for_status()
+            mime_type   = resp.headers.get("content-type", "audio/ogg").split(";")[0].strip()
+            audio_bytes = resp.content
+    except Exception as e:
+        logger.error(f"Audio download failed for {runner_id}: {e}")
+        await whatsapp.send_text(phone, "Couldn't load that voice note — can you type it out instead?")
+        return
+
+    try:
+        transcript = await llm.transcribe(audio_bytes, mime_type)
+    except Exception as e:
+        logger.error(f"Transcription failed for {runner_id}: {e}")
+        await whatsapp.send_text(phone, "Couldn't transcribe that voice note — can you type it out instead?")
+        return
+
+    if not transcript:
+        await whatsapp.send_text(phone, "Didn't catch anything in that voice note — could you try again or type it?")
+        return
+
+    logger.info(f"Voice note transcribed for {runner_id}: {transcript[:100]}")
+
+    # Process transcript through normal pipeline; log inbound as "[Voice note] transcript"
+    result = await generate_runner_response(
+        sender, transcript,
+        inbound_override=f"[Voice note] {transcript}",
+    )
+    if result["response"]:
+        await whatsapp.send_text(phone, result["response"])
 
 
 async def handle_runner_message(sender: dict, message: str):
