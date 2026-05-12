@@ -359,30 +359,34 @@ async def handle_runner_image(sender: dict, image_url: str, caption: str = ""):
 
     system = (
         "You are a running coach receiving a workout screenshot from a runner on WhatsApp. "
-        "Extract all visible stats from the image (distance, duration, avg pace, avg HR, max HR, "
-        "elevation, calories, cadence, power, app/device name — whatever is visible). "
-        "Return ONLY valid JSON with exactly two keys:\n"
-        "  'response': 1-2 sentence coaching reply acknowledging the specific numbers (plain text, no name opener)\n"
-        "  'stats': object with these keys if visible — distance_km (number), duration_min (number), "
-        "avg_pace (string e.g. '5:52'), avg_hr (number), max_hr (number), elevation_m (number), "
-        "calories (number), cadence (number), data_source (string e.g. 'Garmin'). "
-        "Omit any key not visible in the image."
+        "Extract ALL stats visible in the image — whatever the app shows. Do not limit yourself "
+        "to a fixed set of fields; use natural key names for everything you can read. "
+        "Return ONLY valid JSON with exactly three keys:\n"
+        "  'response': 1-2 sentence coaching reply using the specific numbers you extracted "
+        "(plain text, no opener with runner's name, no generic advice)\n"
+        "  'stats': object of every metric you can read from the image — distance, pace, HR, "
+        "splits, zones, elevation, cadence, power, calories, app name, etc.\n"
+        "  'summary': one paragraph in plain English describing ALL the extracted data completely — "
+        "this will be stored as context so the runner can ask follow-up questions and get accurate answers. "
+        "Include every number you extracted."
     )
     text_prompt = (
         f"Runner: {first}" +
         (f", training for {race}" if race else "") +
-        (f". Caption: \"{caption}\"" if caption else "") +
-        ". Extract stats and write coaching reply."
+        (f". Runner's caption: \"{caption}\"" if caption else "") +
+        ". Extract everything visible and write the coaching reply."
     )
 
     response = "Got your workout — can you share the key numbers (distance, pace, HR) so I can give proper feedback?"
     stats: dict = {}
+    summary = ""
     try:
-        raw = await llm.complete_with_image(system, text_prompt, image_b64, mime_type, max_tokens=400)
+        raw = await llm.complete_with_image(system, text_prompt, image_b64, mime_type, max_tokens=600)
         raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-        parsed  = json.loads(raw)
+        parsed   = json.loads(raw)
         response = parsed.get("response", response)
         stats    = parsed.get("stats", {})
+        summary  = parsed.get("summary", "")
     except Exception as e:
         logger.error(f"Vision call/parse failed for {runner_id}: {e}")
 
@@ -392,13 +396,19 @@ async def handle_runner_image(sender: dict, image_url: str, caption: str = ""):
         plan_id = plan.get("plan_id") or plan.get("_id", "")
         if plan_id:
             stats["image_url"] = image_url
+            stats["summary"]   = summary
             sheets.update_plan_actuals(plan_id, stats)
             logger.info(f"Actuals written to plan {plan_id} for runner {runner_id}")
 
-    # Log with image_url so dashboard can display the image
+    # Store the full stats summary as the inbound message so follow-up questions
+    # have the extracted data in conversation history and can answer precisely
+    inbound_text = caption or ""
+    if summary:
+        inbound_text = f"[Workout image] {caption}\n\nExtracted stats: {summary}" if caption else f"[Workout image] {summary}"
+
     sheets.log_conversation(
         runner_id, coach_id,
-        inbound=caption or "[image]",
+        inbound=inbound_text or "[image]",
         outbound=response,
         intent="image_upload",
         media_id=image_url,

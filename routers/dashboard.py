@@ -1442,32 +1442,39 @@ async function openPanel(runnerId, focusCompose = false) {
       <div class="plan-title">${p.session_type||'—'}</div>`;
 
     if (hasActuals) {
-      // Planned vs Actual comparison table
+      // Known indexed fields for comparison table
       const rows = [
-        ['Distance', plannedDist, p.actual_distance ? `${p.actual_distance}km` : null],
-        ['Pace',     p.intensity || '—', p.actual_pace || null],
-        ['Avg HR',   '—',               p.actual_hr   ? `${p.actual_hr} bpm` : null],
-        ['Max HR',   '—',               p.actual_hr_max ? `${p.actual_hr_max} bpm` : null],
-        ['Duration', '—',               p.actual_duration_min ? `${p.actual_duration_min} min` : null],
-        ['Elevation','—',               p.actual_elevation_m ? `${p.actual_elevation_m}m` : null],
-        ['Cadence',  '—',               p.actual_cadence ? `${p.actual_cadence} spm` : null],
-        ['Calories', '—',               p.actual_calories ? `${p.actual_calories} kcal` : null],
-      ].filter(([, , a]) => a);
+        ['Distance', plannedDist,        p.actual_distance     ? `${p.actual_distance}km`       : null],
+        ['Pace',     p.intensity || '—', p.actual_pace         || null],
+        ['Avg HR',   '—',                p.actual_hr           ? `${p.actual_hr} bpm`            : null],
+        ['Max HR',   '—',                p.actual_hr_max       ? `${p.actual_hr_max} bpm`        : null],
+        ['Duration', '—',                p.actual_duration_min ? `${p.actual_duration_min} min`  : null],
+        ['Elevation','—',                p.actual_elevation_m  ? `${p.actual_elevation_m}m`      : null],
+        ['Cadence',  '—',                p.actual_cadence      ? `${p.actual_cadence} spm`       : null],
+        ['Calories', '—',                p.actual_calories     ? `${p.actual_calories} kcal`     : null],
+      ].filter(([,,a]) => a);
 
-      todayHtml += `<table style="width:100%;font-size:12px;margin:10px 0;border-collapse:collapse">
-        <thead><tr>
-          <th style="text-align:left;color:#888;padding:3px 6px;font-weight:600">Metric</th>
-          <th style="text-align:right;color:#888;padding:3px 6px;font-weight:600">Planned</th>
-          <th style="text-align:right;color:#00a884;padding:3px 6px;font-weight:600">Actual</th>
-        </tr></thead>
-        <tbody>${rows.map(([label, planned, actual]) =>
-          `<tr style="border-top:1px solid #f5f5f5">
-            <td style="padding:4px 6px;color:#555">${label}</td>
-            <td style="padding:4px 6px;text-align:right;color:#aaa">${planned}</td>
-            <td style="padding:4px 6px;text-align:right;font-weight:600">${actual}</td>
-          </tr>`).join('')}
-        </tbody>
-      </table>`;
+      if (rows.length) {
+        todayHtml += `<table style="width:100%;font-size:12px;margin:10px 0;border-collapse:collapse">
+          <thead><tr>
+            <th style="text-align:left;color:#888;padding:3px 6px;font-weight:600">Metric</th>
+            <th style="text-align:right;color:#888;padding:3px 6px;font-weight:600">Planned</th>
+            <th style="text-align:right;color:#00a884;padding:3px 6px;font-weight:600">Actual</th>
+          </tr></thead>
+          <tbody>${rows.map(([label, planned, actual]) =>
+            `<tr style="border-top:1px solid #f5f5f5">
+              <td style="padding:4px 6px;color:#555">${label}</td>
+              <td style="padding:4px 6px;text-align:right;color:#aaa">${planned}</td>
+              <td style="padding:4px 6px;text-align:right;font-weight:600">${actual}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>`;
+      }
+
+      // Full summary from GPT-4o (contains everything it extracted)
+      if (p.actual_summary) {
+        todayHtml += `<div style="font-size:12px;color:#444;line-height:1.5;margin:8px 0;padding:8px;background:#f9f9f9;border-radius:6px">${p.actual_summary}</div>`;
+      }
 
       if (p.actual_data_source) {
         todayHtml += `<div style="font-size:11px;color:#aaa;margin-bottom:6px">via ${p.actual_data_source}</div>`;

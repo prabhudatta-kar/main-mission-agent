@@ -340,23 +340,40 @@ class FirebaseClient:
         return max(candidates, key=lambda p: p.get("date", ""), default=None)
 
     def update_plan_actuals(self, plan_id: str, actuals: dict):
-        """Write extracted workout stats back to the plan and mark completed."""
+        """Write extracted workout stats back to the plan and mark completed.
+        Stores the full stats dict as JSON + maps well-known keys to indexed fields."""
         fields = {"completed": "TRUE"}
-        stat_map = {
-            "distance_km":    "actual_distance",
-            "duration_min":   "actual_duration_min",
-            "avg_pace":       "actual_pace",
-            "avg_hr":         "actual_hr",
-            "max_hr":         "actual_hr_max",
-            "elevation_m":    "actual_elevation_m",
-            "calories":       "actual_calories",
-            "cadence":        "actual_cadence",
-            "data_source":    "actual_data_source",
-            "image_url":      "actual_image_url",
+
+        # Store the full flexible stats as JSON for complete reference
+        full = {k: v for k, v in actuals.items() if k not in ("image_url", "summary")}
+        if full:
+            fields["actual_stats_json"] = json.dumps(full)
+        if actuals.get("summary"):
+            fields["actual_summary"] = actuals["summary"]
+        if actuals.get("image_url"):
+            fields["actual_image_url"] = actuals["image_url"]
+
+        # Also map common keys to indexed fields for dashboard display
+        well_known = {
+            "distance_km":  "actual_distance",
+            "distance":     "actual_distance",
+            "duration_min": "actual_duration_min",
+            "avg_pace":     "actual_pace",
+            "pace":         "actual_pace",
+            "avg_hr":       "actual_hr",
+            "heart_rate":   "actual_hr",
+            "max_hr":       "actual_hr_max",
+            "elevation_m":  "actual_elevation_m",
+            "elevation":    "actual_elevation_m",
+            "calories":     "actual_calories",
+            "cadence":      "actual_cadence",
+            "data_source":  "actual_data_source",
+            "app":          "actual_data_source",
         }
-        for src, dst in stat_map.items():
-            if actuals.get(src) is not None:
+        for src, dst in well_known.items():
+            if actuals.get(src) is not None and dst not in fields:
                 fields[dst] = str(actuals[src])
+
         self._col("training_plans").document(plan_id).update(fields)
         logger.info(f"Plan {plan_id} updated with actuals: {list(fields.keys())}")
 
