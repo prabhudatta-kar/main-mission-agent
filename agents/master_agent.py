@@ -16,19 +16,21 @@ async def handle_incoming(data: dict):
         logger.debug("Skipping operator-sent message (owner=True)")
         return
 
-    phone = data.get("waId") or data.get("phone")
+    msg_type = data.get("type", "")
+    phone    = data.get("waId") or data.get("phone")
 
-    # Wati sends text as a plain string (not {"body": ...})
-    text_field = data.get("text", "")
-    message = text_field if isinstance(text_field, str) else text_field.get("body", "")
+    # Wati sends text as a plain string; for image messages text is null
+    text_field = data.get("text") or ""
+    message    = text_field if isinstance(text_field, str) else (text_field.get("body", "") if text_field else "")
 
-    if not phone or not message:
+    # For image messages allow empty message (caption may be blank)
+    if not phone or (not message and msg_type != "image"):
         logger.debug("Skipping webhook event — no phone or message body")
         return
 
     normalized = _normalize_phone(phone)
     sender = identify_sender(normalized)
-    logger.info(f"Incoming from {normalized} (type={sender['type']}): {message[:60]}")
+    logger.info(f"Incoming from {normalized} (type={sender['type']}): {message[:60] or '[image]'}")
 
     if sender["type"] == "runner":
         runner_data = sender["data"]
