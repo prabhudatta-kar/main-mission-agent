@@ -737,9 +737,9 @@ async def api_bulk_plan(req: BulkPlanReq):
 # ── Profile enrichment ────────────────────────────────────────────────────────
 
 _PROFILE_FIELD_QUESTIONS = {
-    "pb_10k":            "Quick one — what's your 10K PB? Even a rough time helps your coach set the right paces for you.",
-    "pb_5k":             "Do you have a recent 5K time? Helps calibrate your training zones.",
-    "current_easy_pace": "What pace do you typically run your easy runs at (per km)?",
+    "pb_10k":            "what's your 10K PB",
+    "pb_5k":             "do you have a recent 5K time",
+    "current_easy_pace": "what pace do you run your easy runs at",
 }
 
 @router.post("/api/runner/{runner_id}/ask-profile")
@@ -756,11 +756,9 @@ async def api_ask_profile(runner_id: str):
         return {"ok": True, "method": "none", "message": "Profile already complete"}
 
     if len(missing_qs) == 1:
-        question = missing_qs[0]
+        question = f"Quick one — {missing_qs[0]}?"
     else:
-        # Combine into one natural message
-        stems = [q.split("—")[0].rstrip("?").strip() for q in missing_qs]
-        question = "Quick questions for your coach — " + ", ".join(stems[:-1]) + ", and " + stems[-1] + "?"
+        question = "Quick questions — " + ", ".join(missing_qs[:-1]) + ", and " + missing_qs[-1] + "?"
 
     window_open = sheets.is_within_session_window(runner_id)
     await send_runner_message(runner, question)
