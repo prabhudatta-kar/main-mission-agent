@@ -42,8 +42,8 @@ async def handle_incoming(data: dict):
     text_field = data.get("text") or ""
     message    = text_field if isinstance(text_field, str) else (text_field.get("body", "") if text_field else "")
 
-    # For image messages allow empty message (caption may be blank)
-    if not phone or (not message and not is_image):
+    # Allow empty message for image and audio — they carry media, not text
+    if not phone or (not message and not is_image and not is_audio):
         logger.debug("Skipping webhook event — no phone or message body")
         return
 
