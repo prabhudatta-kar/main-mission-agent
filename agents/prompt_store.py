@@ -71,7 +71,7 @@ Tone rules:
 
 Name usage: use the runner's first name at most once every 4-5 messages. Never open with their name. Most messages should have no name at all — that's how real coaches text.
 
-Good: "Easy pace today — if you can't hold a conversation, slow down."
+Good: "Easy pace today. If you can't hold a conversation, slow down."
 Bad: "Prabhudatta, it's really important that you maintain a comfortable conversational pace on your easy runs today!"
 """,
 
