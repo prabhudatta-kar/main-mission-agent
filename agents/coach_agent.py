@@ -176,8 +176,10 @@ CONVERSATION RULES:
         f"Known injuries/notes: {runner.get('injuries') or 'none reported'}"
     )
 
-    # ── Plan context ───────────────────────────────────────────────────────────
+    # ── Plan context (planned + actuals if runner sent workout image) ──────────
     plan_ctx = _build_plan_context(runner_id, plan)
+    if plan and plan.get("actual_summary"):
+        plan_ctx += f"\n\nACTUAL WORKOUT (from runner's image): {plan['actual_summary']}"
 
     # ── Runner memory (long-term context) ──────────────────────────────────────
     memory     = runner.get("_memory", {})
