@@ -7,13 +7,68 @@ scheduler = AsyncIOScheduler(timezone="Asia/Kolkata")
 
 
 def start_scheduler():
-    scheduler.add_job(send_morning_messages, "cron", hour=MORNING_MESSAGE_HOUR, minute=0)
-    scheduler.add_job(evening_checkin,        "cron", hour=EVENING_CHECKIN_HOUR, minute=0)
-    scheduler.add_job(send_coach_digest,      "cron", hour=DIGEST_HOUR,          minute=0)
-    scheduler.add_job(_run_system_watcher,    "cron", hour=SYSTEM_WATCHER_HOUR,  minute=30)
-    scheduler.add_job(_run_coach_watcher,     "cron", hour=COACH_WATCHER_HOUR,   minute=0)
-    scheduler.add_job(_build_runner_memories, "cron", hour=MEMORY_BUILD_HOUR,    minute=0)
+    scheduler.add_job(send_morning_messages,   "cron", hour=MORNING_MESSAGE_HOUR, minute=0)
+    scheduler.add_job(evening_checkin,          "cron", hour=EVENING_CHECKIN_HOUR, minute=0)
+    scheduler.add_job(send_coach_digest,        "cron", hour=DIGEST_HOUR,          minute=0)
+    scheduler.add_job(_run_system_watcher,      "cron", hour=SYSTEM_WATCHER_HOUR,  minute=30)
+    scheduler.add_job(_run_coach_watcher,       "cron", hour=COACH_WATCHER_HOUR,   minute=0)
+    scheduler.add_job(_build_runner_memories,   "cron", hour=MEMORY_BUILD_HOUR,    minute=0)
+    scheduler.add_job(_check_trial_expiries,    "cron", hour=8,                    minute=0)
     scheduler.start()
+
+
+async def _check_trial_expiries():
+    """Send subscription links to runners whose trial ended today or earlier."""
+    from datetime import date
+    from integrations.razorpay import create_subscription
+    from config.settings import SUPPORT_EMAIL
+
+    today = date.today().isoformat()
+    runners = sheets.get_all_active_runners()
+
+    for runner in runners:
+        if runner.get("payment_status") != "Trial":
+            continue
+        trial_end = runner.get("trial_end_date", "")
+        if not trial_end or trial_end > today:
+            continue
+
+        runner_id = runner["runner_id"]
+        phone     = runner.get("phone", "")
+        first     = (runner.get("name") or "there").split()[0]
+        if first == "New": first = "there"
+
+        # Mark as Unpaid before sending so this only fires once
+        sheets.update_runner(runner_id, {"payment_status": "Unpaid"})
+
+        link = runner.get("payment_link", "")
+        if not link:
+            try:
+                link = await create_subscription(
+                    name=runner.get("name", "Runner"),
+                    phone=phone,
+                    coach_id=runner.get("coach_id", ""),
+                    runner_id=runner_id,
+                )
+                if link:
+                    sheets.update_runner(runner_id, {"payment_link": link})
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error(f"Razorpay link failed for {runner_id}: {e}")
+
+        if link:
+            msg = (
+                f"Your 2-week trial has ended — hope the coaching has been valuable! "
+                f"To keep your plan and progress going, subscribe here:\n{link}"
+            )
+        else:
+            msg = (
+                f"Your trial has ended. To continue coaching, reach out at {SUPPORT_EMAIL}."
+            )
+
+        await whatsapp.send_text(phone, msg)
+        sheets.log_platform_event("trial_expired", runner_id, runner.get("coach_id", ""),
+                                  f"Trial ended {trial_end}, subscription link sent")
 
 
 async def _build_runner_memories():

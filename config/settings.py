@@ -30,6 +30,8 @@ SESSION_SECRET          = os.getenv("SESSION_SECRET", "mm-default-secret-change-
 APP_URL                 = os.getenv("APP_URL", "https://web-production-a1ef8.up.railway.app")
 SUPPORT_EMAIL           = os.getenv("SUPPORT_EMAIL", "indiranagarrunclub@gmail.com")
 
+TRIAL_DAYS = int(os.getenv("TRIAL_DAYS", 14))
+
 APP_ENV = os.getenv("APP_ENV", "development")
 TIMEZONE = os.getenv("TIMEZONE", "Asia/Kolkata")
 MORNING_MESSAGE_HOUR = int(os.getenv("MORNING_MESSAGE_HOUR", 6))

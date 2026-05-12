@@ -129,7 +129,7 @@ async def _complete_onboarding(phone: str, session: dict) -> None:
     sheets.delete_onboarding_session(phone)
     logger.info(f"Onboarding completed for {phone} → runner {runner_id}")
 
-    await _send_payment_link(phone, runner_id, session)
+    await _start_trial(phone, runner_id, session)
 
 
 async def _resolve_race(race_name: str) -> dict:
@@ -216,31 +216,30 @@ Return this exact JSON, no markdown:
         return {"name": "", "race_goal": "", "race_date": "", "weekly_days": "", "injuries": "None", "fitness_level": "Intermediate"}
 
 
-async def _send_payment_link(phone: str, runner_id: str, session: dict):
-    try:
-        from integrations.razorpay import create_subscription
-        name     = session.get("name", "Runner")
-        coach_id = session.get("coach_id", "")
-        first    = name.split()[0] if name not in ("New Runner", "", None) else ""
+async def _start_trial(phone: str, runner_id: str, session: dict):
+    from datetime import timedelta
+    from config.settings import TRIAL_DAYS
+    name  = session.get("name", "Runner")
+    first = name.split()[0] if name not in ("New Runner", "", None) else ""
 
-        short_url = await create_subscription(
-            name=name, phone=phone, coach_id=coach_id, runner_id=runner_id
-        )
+    trial_start = date.today()
+    trial_end   = trial_start + timedelta(days=TRIAL_DAYS)
 
-        if short_url:
-            sheets.update_runner(runner_id, {"payment_link": short_url})
-            msg = (
-                f"Got everything I need{', ' + first if first else ''}. "
-                f"Last step — set up your subscription here:\n{short_url}"
-            )
-        else:
-            msg = (
-                f"Got everything I need{', ' + first if first else ''}. "
-                f"Your coach will be in touch within 24 hours to get things started."
-            )
+    sheets.update_runner(runner_id, {
+        "payment_status":  "Trial",
+        "status":          "Active",
+        "trial_start_date": trial_start.isoformat(),
+        "trial_end_date":   trial_end.isoformat(),
+    })
 
-        await whatsapp.send_text(phone, msg)
-        logger.info(f"Payment link sent to {phone}: {short_url or '(Razorpay not configured)'}")
-
-    except Exception as e:
-        logger.error(f"Failed to send payment link to {phone}: {e}")
+    end_str = trial_end.strftime("%-d %B")   # e.g. "26 May"
+    msg = (
+        f"All set{', ' + first if first else ''}! Your 2-week free trial starts today. "
+        f"Coach will have your training plan ready within 24 hours. "
+        f"Your trial runs until {end_str} — we'll send a subscription link then to keep things going. "
+        f"Message here anytime."
+    )
+    await whatsapp.send_text(phone, msg)
+    sheets.log_platform_event("trial_started", runner_id, session.get("coach_id", ""),
+                              f"2-week trial started, ends {trial_end.isoformat()}")
+    logger.info(f"Trial started for {runner_id} until {trial_end.isoformat()}")

@@ -65,6 +65,13 @@ async def handle_incoming(data: dict):
         if str(runner_data.get("onboarded", "TRUE")).upper() == "FALSE":
             response = await _run_onboarding(normalized, sender, message)
             await whatsapp.send_text(runner_data["phone"], response)
+        elif runner_data.get("payment_status") == "Trial":
+            from datetime import date as _date
+            trial_end = runner_data.get("trial_end_date", "")
+            if trial_end and _date.today().isoformat() <= trial_end:
+                await handle_runner_message(sender, message)   # trial active — full access
+            else:
+                await _handle_trial_expired(runner_data, message)
         elif runner_data.get("payment_status", "Paid") == "Unpaid":
             await _handle_unpaid_runner(runner_data, message)
         else:
@@ -138,6 +145,48 @@ async def _run_onboarding(phone: str, sender: dict, message: str, name: str = No
             prefilled=prefilled,
         )
     return await handle_onboarding(phone, message)
+
+
+async def _handle_trial_expired(runner_data: dict, message: str):
+    """Trial ended — send subscription link once, then stay silent on repeats."""
+    phone     = runner_data.get("phone", "")
+    runner_id = runner_data.get("runner_id", "")
+    first     = (runner_data.get("name") or "there").split()[0]
+    if first == "New": first = "there"
+
+    # Update status so the link is only sent once
+    sheets.update_runner(runner_id, {"payment_status": "Unpaid"})
+
+    link = runner_data.get("payment_link", "")
+    if not link:
+        try:
+            from integrations.razorpay import create_subscription
+            link = await create_subscription(
+                name=runner_data.get("name", "Runner"),
+                phone=phone,
+                coach_id=runner_data.get("coach_id", ""),
+                runner_id=runner_id,
+            )
+            if link:
+                sheets.update_runner(runner_id, {"payment_link": link})
+        except Exception as e:
+            logger.error(f"Razorpay link generation failed for {runner_id}: {e}")
+
+    if link:
+        msg = (
+            f"Your 2-week trial has ended — hope the coaching has been useful! "
+            f"To keep your plan going, complete your subscription here:\n{link}"
+        )
+    else:
+        msg = (
+            f"Your trial has ended. To continue, message us at {SUPPORT_EMAIL} "
+            f"and we'll get you set up."
+        )
+
+    await whatsapp.send_text(phone, msg)
+    sheets.log_platform_event("trial_expired", runner_id, runner_data.get("coach_id", ""),
+                              f"Trial ended, subscription link sent")
+    logger.info(f"Trial expired for {runner_id} — subscription link sent")
 
 
 async def _handle_unpaid_runner(runner_data: dict, message: str):
