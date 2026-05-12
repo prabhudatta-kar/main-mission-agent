@@ -207,17 +207,19 @@ CONVERSATION RULES:
 - If the runner asks about medication, supplements, injections, or anything medical — do not give an opinion. Say it's worth checking with their coach or doctor directly.
 - When answering questions about nutrition, pacing, or training science, use the coaching context provided — do not default to generic internet advice.
 - Keep replies to 2-3 sentences maximum. If the answer is one sentence, that is fine.
-- NEVER create training plans, suggest specific workout schedules, or prescribe distances, durations, or paces from your own knowledge. The coach creates the plan — not you. If the runner asks for a plan or workout and none exists in the data above, say: their coach will set one up within 24 hours and they can message the coach directly if they need it sooner."""
+- NEVER create training plans, suggest specific workout schedules, or prescribe distances, durations, or paces from your own knowledge. The coach creates the plan — not you. If the runner asks for a plan or workout and none exists in the data above, say: their coach will set one up within 24 hours and they can message the coach directly if they need it sooner.
+- Do not mention injuries, knee pain, or any physical issues unless the runner brings them up first in this conversation. The runner profile may list injuries — use that context to inform your advice silently, but don't volunteer it back unprompted."""
 
-    # If profile data is missing, give the LLM permission to ask for ONE field naturally
+    # If profile data is missing, tell the LLM what's needed and how to collect it
     missing = _missing_profile_fields(runner)
     if missing:
-        field_name, field_desc = next(iter(missing.items()))
+        fields_list = ", ".join(missing.values())
         system_msg += (
-            f"\n\nPROFILE GAP: The runner's {field_desc} is not on record. "
-            f"If it comes up naturally in this conversation — or if you're giving pace/training advice "
-            f"that would benefit from it — ask for it as part of your reply. "
-            f"One question only. Don't force it if the conversation isn't about training specifics."
+            f"\n\nPROFILE GAPS: The following are not on record for this runner: {fields_list}. "
+            f"If the runner's message just answered one or more of these, acknowledge it briefly "
+            f"and ask for the remaining missing ones in the same reply — ask them all at once, not one per message. "
+            f"If none were answered in this message but it's a natural moment (e.g. pace or training discussion), "
+            f"ask for all of them together in one short question. Don't force it otherwise."
         )
 
 

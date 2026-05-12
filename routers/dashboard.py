@@ -750,15 +750,17 @@ async def api_ask_profile(runner_id: str):
     if not runner:
         return JSONResponse({"error": "Runner not found"}, status_code=404)
 
-    # Find the first missing field and ask for it
-    question = None
-    for field, q in _PROFILE_FIELD_QUESTIONS.items():
-        if not runner.get(field):
-            question = q
-            break
-
-    if not question:
+    # Collect ALL missing fields and ask for them in one message
+    missing_qs = [q for field, q in _PROFILE_FIELD_QUESTIONS.items() if not runner.get(field)]
+    if not missing_qs:
         return {"ok": True, "method": "none", "message": "Profile already complete"}
+
+    if len(missing_qs) == 1:
+        question = missing_qs[0]
+    else:
+        # Combine into one natural message
+        stems = [q.split("—")[0].rstrip("?").strip() for q in missing_qs]
+        question = "Quick questions for your coach — " + ", ".join(stems[:-1]) + ", and " + stems[-1] + "?"
 
     window_open = sheets.is_within_session_window(runner_id)
     await send_runner_message(runner, question)
