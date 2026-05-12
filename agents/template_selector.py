@@ -242,10 +242,17 @@ async def _fill_creative_vars(
 
 # ── Plan intent handlers (no LLM for query; minimal LLM for change requests) ──
 
+def _today_ist() -> date:
+    """Return today's date in IST — server runs UTC, runners are in India."""
+    import pytz
+    from datetime import datetime
+    return datetime.now(pytz.timezone("Asia/Kolkata")).date()
+
+
 def _parse_plan_date(message: str):
     """Return (date_str, label). date_str is None for week-view requests."""
     msg = message.lower()
-    today = date.today()
+    today = _today_ist()
 
     if any(k in msg for k in ("this week", "training this week", "sessions this week",
                                "week's plan", "week's training", "weekly")):
@@ -307,14 +314,16 @@ async def _handle_plan_query(runner: dict, today_plan, message: str) -> str:
     first      = (runner.get("name") or "there").split()[0]
     runner_id  = runner.get("runner_id", "")
 
-    # "when is my next run?" — find next non-rest session from today/tomorrow
+    # "when is my next run?" — find next non-rest session strictly in the future
     if _is_next_session_query(message):
-        start = date.today().isoformat()
-        end   = (date.today() + timedelta(days=21)).isoformat()
+        today_ist = _today_ist()
+        # Start from tomorrow — today's session has likely already passed or is today
+        start = (today_ist + timedelta(days=1)).isoformat()
+        end   = (today_ist + timedelta(days=21)).isoformat()
         plans = sheets.get_runner_plans(runner_id, from_date=start, to_date=end)
         upcoming = [p for p in plans if str(p.get("day_type", "")).lower() != "rest"]
         if not upcoming:
-            return fill_template("plan_no_session", {"first_name": first, "day_label": "the next 3 weeks"})
+            return f"No sessions are scheduled in the next 3 weeks — your coach will add more soon. Message them directly if you need it sooner."
         plan  = upcoming[0]
         try:
             label = date.fromisoformat(plan["date"]).strftime("%A, %d %b")
@@ -336,14 +345,15 @@ async def _handle_plan_query(runner: dict, today_plan, message: str) -> str:
     if any(p in msg_lower for p in ("give me details", "more details", "tell me more about",
                                      "what distance", "how far", "as per plan", "planned distance",
                                      "how many km", "what's the distance", "what is the distance")):
+        today_ist = _today_ist()
         # Check today first, then tomorrow
         plan = today_plan
         if not plan or str(plan.get("day_type", "")).lower() == "rest":
-            plan = sheets.get_plan_by_date(runner_id, (date.today() + timedelta(days=1)).isoformat())
+            plan = sheets.get_plan_by_date(runner_id, (today_ist + timedelta(days=1)).isoformat())
         if not plan:
             # Fall back to next upcoming
-            start = (date.today() + timedelta(days=1)).isoformat()
-            end   = (date.today() + timedelta(days=14)).isoformat()
+            start = (today_ist + timedelta(days=1)).isoformat()
+            end   = (today_ist + timedelta(days=14)).isoformat()
             plans = sheets.get_runner_plans(runner_id, from_date=start, to_date=end)
             upcoming = [p for p in plans if str(p.get("day_type", "")).lower() != "rest"]
             plan = upcoming[0] if upcoming else None

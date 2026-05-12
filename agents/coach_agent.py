@@ -160,8 +160,11 @@ def _build_plan_context(runner_id: str, plan) -> str:
         return ctx
 
     # Rest day or no plan — find next upcoming session so LLM doesn't invent one
-    start    = (date.today() + timedelta(days=1)).isoformat()
-    end      = (date.today() + timedelta(days=14)).isoformat()
+    import pytz as _pytz
+    from datetime import datetime as _dt
+    today_ist = _dt.now(_pytz.timezone("Asia/Kolkata")).date()
+    start    = (today_ist + timedelta(days=1)).isoformat()
+    end      = (today_ist + timedelta(days=14)).isoformat()
     upcoming = [p for p in sheets.get_runner_plans(runner_id, from_date=start, to_date=end)
                 if str(p.get("day_type", "")).lower() != "rest"]
     if upcoming:
