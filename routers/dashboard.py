@@ -2265,18 +2265,67 @@ async function loadGroups() {
             onclick="unassignRunner('${r.runner_id}','${g.group_id}')">Remove</button>
         </div>`).join('')
       : '<div style="color:#aaa;font-size:12px;padding:4px 0">No runners assigned</div>';
-    return `<div class="group-card">
+    return `<div class="group-card" id="grpcard-${g.group_id}">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
         <span class="gc-dot" style="background:${g.color}"></span>
         <span class="gc-name">${g.name}</span>
         <span class="gc-count">${rCount} runner${rCount !== 1 ? 's' : ''}</span>
-        <button class="act-btn del" style="margin-left:auto;padding:2px 8px;font-size:11px"
-          onclick="deleteGroup('${g.group_id}','${g.name}')">Delete</button>
+        <div style="margin-left:auto;display:flex;gap:4px">
+          <button class="act-btn" style="padding:2px 8px;font-size:11px"
+            onclick="editGroup('${g.group_id}','${g.name}','${(g.description||'').replace(/'/g,"\\'")}','${g.color}')">Edit</button>
+          <button class="act-btn del" style="padding:2px 8px;font-size:11px"
+            onclick="deleteGroup('${g.group_id}','${g.name}')">Delete</button>
+        </div>
+      </div>
+      <div id="grpedit-${g.group_id}" style="display:none;margin-bottom:8px;background:#f0f4ff;border-radius:8px;padding:10px;gap:8px;flex-direction:column">
+        <div style="display:flex;gap:8px">
+          <input id="ge-name-${g.group_id}" type="text" value="${g.name}"
+            style="flex:1;border:1px solid #c7d2fe;border-radius:6px;padding:6px 10px;font-size:13px;outline:none">
+          <input id="ge-desc-${g.group_id}" type="text" value="${g.description||''}" placeholder="Description"
+            style="flex:2;border:1px solid #c7d2fe;border-radius:6px;padding:6px 10px;font-size:13px;outline:none">
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <label style="font-size:12px;font-weight:600">Colour:</label>
+          ${['#e11d48','#2563eb','#16a34a','#d97706','#7c3aed','#0891b2','#db2777'].map(c =>
+            `<span onclick="this.parentElement.dataset.color='${c}';this.parentElement.querySelectorAll('span[onclick]').forEach(s=>s.style.outline='');this.style.outline='2px solid #1a1a2e'"
+              style="width:18px;height:18px;border-radius:50%;background:${c};cursor:pointer;display:inline-block;${g.color===c?'outline:2px solid #1a1a2e':''}"></span>`
+          ).join('')}
+          <input type="hidden" id="ge-color-${g.group_id}" value="${g.color}" data-color="${g.color}">
+          <button class="btn-purple" style="margin-left:auto;padding:4px 12px;font-size:12px"
+            onclick="saveGroupEdit('${g.group_id}')">Save</button>
+          <button class="btn-secondary" style="padding:4px 12px;font-size:12px"
+            onclick="document.getElementById('grpedit-${g.group_id}').style.display='none'">Cancel</button>
+        </div>
       </div>
       ${g.description ? `<div style="font-size:12px;color:#888;margin-bottom:6px">${g.description}</div>` : ''}
       <div class="group-runner-list">${runnerList}</div>
     </div>`;
   }).join('');
+}
+
+function editGroup(groupId, name, desc, color) {
+  const el = document.getElementById(`grpedit-${groupId}`);
+  el.style.display = el.style.display === 'none' ? 'flex' : 'none';
+}
+
+async function saveGroupEdit(groupId) {
+  const name  = document.getElementById(`ge-name-${groupId}`).value.trim();
+  const desc  = document.getElementById(`ge-desc-${groupId}`).value.trim();
+  // Read colour from the hidden input (updated via data-color on parent)
+  const colorEl = document.getElementById(`ge-color-${groupId}`);
+  const parent  = colorEl.closest('[data-color]') || colorEl.parentElement;
+  const color   = parent.dataset.color || colorEl.value;
+  if (!name) { toast('Group name cannot be empty', true); return; }
+  await fetch(`/dashboard/api/group/${groupId}`, {
+    method: 'PUT', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({name, description: desc, color}),
+  });
+  // Update global groups list for table badges
+  const g = allGroups.find(x => x.group_id === groupId);
+  if (g) { g.name = name; g.description = desc; g.color = color; }
+  toast('Group updated ✓');
+  await loadGroups();
+  renderTable();
 }
 
 async function askRunnerProfile(runnerId, btn) {
