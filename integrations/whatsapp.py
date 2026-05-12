@@ -108,10 +108,18 @@ async def send_runner_message(runner: dict, message: str):
     else:
         # Session expired — use mm_question_general as generic fallback.
         # Template body: "{first_name}, {answer}"
-        # Trim message to 1024 chars (WhatsApp template limit).
+        # Strip any leading "Name," or "Name!" prefix from the message body
+        # to prevent doubling — the template already prepends the name.
+        answer = message.strip()
+        if first and first != "there":
+            for sep in (", ", "! ", "! \n", ",\n"):
+                prefix = first + sep
+                if answer.startswith(prefix):
+                    answer = answer[len(prefix):].lstrip()
+                    break
         await whatsapp.send_template(
             phone=phone,
             template_name="mm_question_general",
-            variables={"first_name": first, "answer": message[:1024]},
+            variables={"first_name": first, "answer": answer[:1024]},
         )
         logger.info(f"Used template fallback for {phone} (session window expired)")
