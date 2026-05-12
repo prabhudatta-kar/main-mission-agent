@@ -88,6 +88,8 @@ async def api_data():
             "flags":       plan.get("flags","") if plan else "",
             "last_msg":    last.get("message","")[:80] if last else "",
             "last_dir":    last.get("direction","") if last else "",
+            "group_id":    r.get("group_id",""),
+            "pb_10k":      r.get("pb_10k",""),
         })
 
     return {
@@ -582,6 +584,7 @@ class RunnerUpdateReq(BaseModel):
     payment_status: str | None = None
     status:         str | None = None
     notes:          str | None = None
+    pb_10k:         str | None = None
 
 
 @router.put("/api/runner/{runner_id}")
@@ -604,6 +607,131 @@ async def api_delete_runner(runner_id: str):
         doc.reference.delete()
     sheets.log_platform_event("runner_deleted", runner_id, "", f"Runner {runner_id} deleted from dashboard")
     return {"ok": True}
+
+
+# ── Groups ────────────────────────────────────────────────────────────────────
+
+class GroupReq(BaseModel):
+    coach_id:    str
+    name:        str
+    description: str = ""
+    color:       str = "#2563eb"
+
+class GroupUpdateReq(BaseModel):
+    name:        str = ""
+    description: str = ""
+    color:       str = ""
+
+class AssignGroupReq(BaseModel):
+    group_id: str   # empty string to unassign
+
+class BulkPlanReq(BaseModel):
+    coach_id:     str
+    instructions: str
+    date:         str
+    group_ids:    List[str]
+
+@router.get("/api/groups")
+async def api_groups(coach_id: str = ""):
+    groups = sheets.get_coach_groups(coach_id) if coach_id else []
+    # Enrich each group with runner count
+    result = []
+    for g in sorted(groups, key=lambda x: x.get("name", "")):
+        runners = sheets.get_group_runners(g["group_id"])
+        result.append({**g, "runner_count": len(runners)})
+    return {"groups": result}
+
+@router.post("/api/groups")
+async def api_create_group(req: GroupReq):
+    group_id = sheets.create_group(req.coach_id, req.name, req.description, req.color)
+    return {"ok": True, "group_id": group_id}
+
+@router.put("/api/group/{group_id}")
+async def api_update_group(group_id: str, req: GroupUpdateReq):
+    fields = {k: v for k, v in req.dict().items() if v}
+    if fields:
+        sheets.update_group(group_id, fields)
+    return {"ok": True}
+
+@router.delete("/api/group/{group_id}")
+async def api_delete_group(group_id: str):
+    sheets.delete_group(group_id)
+    return {"ok": True}
+
+@router.put("/api/runner/{runner_id}/group")
+async def api_assign_group(runner_id: str, req: AssignGroupReq):
+    sheets.update_runner(runner_id, {"group_id": req.group_id})
+    return {"ok": True}
+
+@router.post("/api/groups/bulk-plan")
+async def api_bulk_plan(req: BulkPlanReq):
+    """Generate training plans for multiple groups from natural language instructions."""
+    # Collect runners per group
+    groups_data = []
+    all_runner_ids = set()
+    for gid in req.group_ids:
+        runners = sheets.get_group_runners(gid)
+        if not runners:
+            continue
+        grp_doc = sheets._col("groups").document(gid).get()
+        grp_name = grp_doc.to_dict().get("name", gid) if grp_doc.exists else gid
+        group_runners = []
+        for r in runners:
+            if r["runner_id"] in all_runner_ids:
+                continue
+            all_runner_ids.add(r["runner_id"])
+            group_runners.append({
+                "runner_id":     r["runner_id"],
+                "name":          r.get("name", ""),
+                "fitness_level": r.get("fitness_level", "Intermediate"),
+                "pb_10k":        r.get("pb_10k", ""),
+                "race_goal":     r.get("race_goal", ""),
+                "injuries":      r.get("injuries", "none"),
+                "weekly_days":   r.get("weekly_days", 4),
+            })
+        if group_runners:
+            groups_data.append({"group_name": grp_name, "runners": group_runners})
+
+    if not groups_data:
+        return JSONResponse({"error": "No runners found in selected groups"}, status_code=400)
+
+    # Build LLM prompt
+    groups_text = ""
+    for g in groups_data:
+        groups_text += f"\n{g['group_name']}:\n"
+        for r in g["runners"]:
+            pb_str = f", 10K PB: {r['pb_10k']}" if r["pb_10k"] else ""
+            inj_str = f", injuries: {r['injuries']}" if r["injuries"] not in ("none", "None", "") else ""
+            groups_text += (f"  - {r['name']} (ID: {r['runner_id']}): "
+                           f"{r['fitness_level']}{pb_str}{inj_str}, "
+                           f"race: {r['race_goal'] or 'TBD'}\n")
+
+    system = (
+        "You are an expert running coach creating training plans for grouped runners. "
+        "Generate a specific plan for each runner based on their group instructions and individual profile. "
+        "Return ONLY a valid JSON array. Each element:\n"
+        '{"runner_id":"...","runner_name":"...","group_name":"...","day_type":"Run","session_type":"...",'
+        '"distance_km":number,"duration_min":number,"reps":number,"rep_distance_m":number,'
+        '"intensity":"Zone 2|Threshold|VO2 Max|Easy","rpe_target":"4-5",'
+        '"coach_notes":"specific note tailored to this individual runner"}'
+    )
+    user_prompt = (
+        f"Date: {req.date}\n\n"
+        f"Coach instructions: {req.instructions}\n\n"
+        f"Groups and runners:{groups_text}\n"
+        "Create a plan for every runner listed. Tailor coach_notes to each individual."
+    )
+
+    raw = await llm.complete([
+        {"role": "system", "content": system},
+        {"role": "user",   "content": user_prompt},
+    ], model="gpt-4o", max_tokens=4000)
+
+    sessions = _extract_json(raw)
+    if not isinstance(sessions, list):
+        return JSONResponse({"error": "AI returned unexpected format. Try again."}, status_code=500)
+
+    return {"sessions": sessions, "date": req.date}
 
 
 # ── Media proxy ───────────────────────────────────────────────────────────────
@@ -754,6 +882,36 @@ header h1{font-size:18px;font-weight:700;flex:1}
 .alert-bar .alert-icon{font-size:18px}
 .alert-bar strong{color:#856404}
 .alert-names{color:#333;flex:1}
+
+/* Groups */
+.group-badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;color:#fff;white-space:nowrap}
+.group-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;margin-bottom:16px}
+.group-card{background:#f9f9f9;border:2px solid #eee;border-radius:10px;padding:14px;cursor:pointer;transition:all .15s;position:relative}
+.group-card:hover{border-color:#7c3aed}
+.group-card.selected{border-color:#7c3aed;background:#faf5ff}
+.group-card .gc-name{font-size:14px;font-weight:700;margin-bottom:4px}
+.group-card .gc-count{font-size:12px;color:#888}
+.group-card .gc-dot{width:14px;height:14px;border-radius:50%;display:inline-block;margin-right:6px;vertical-align:middle}
+.group-card .gc-actions{display:flex;gap:4px;margin-top:8px}
+.group-runner-list{margin-top:8px;display:flex;flex-direction:column;gap:4px}
+.group-runner-item{font-size:12px;padding:4px 8px;background:#fff;border:1px solid #eee;border-radius:6px;display:flex;align-items:center;justify-content:space-between}
+.gc-swatch{width:20px;height:20px;border-radius:50%;cursor:pointer;border:2px solid transparent;transition:border-color .15s}
+.gc-swatch.active{border-color:#1a1a2e}
+
+/* Bulk plan modal */
+.bulk-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:400;display:flex;align-items:center;justify-content:center;padding:20px}
+.bulk-modal{background:#fff;border-radius:14px;width:92vw;max-width:1100px;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 24px 80px rgba(0,0,0,.25)}
+.bulk-hdr{padding:18px 24px;border-bottom:1px solid #eee;display:flex;align-items:center;gap:12px;flex-shrink:0}
+.bulk-body{flex:1;overflow-y:auto;padding:24px;display:flex;flex-direction:column;gap:16px}
+.bulk-ftr{padding:14px 24px;border-top:1px solid #eee;display:flex;gap:8px;justify-content:flex-end;flex-shrink:0}
+.bulk-group-select{display:flex;flex-wrap:wrap;gap:8px}
+.bulk-group-chip{padding:5px 14px;border-radius:20px;border:2px solid #e5e7eb;font-size:13px;cursor:pointer;font-weight:600;transition:all .15s}
+.bulk-group-chip.active{border-color:var(--c);color:#fff;background:var(--c)}
+.bulk-preview{overflow-x:auto}
+.bulk-preview table{width:100%;border-collapse:collapse;font-size:12px}
+.bulk-preview th{padding:8px 10px;background:#f9f9f9;font-weight:600;color:#555;text-align:left;border-bottom:1px solid #eee;white-space:nowrap}
+.bulk-preview td{padding:7px 10px;border-bottom:1px solid #f5f5f5;vertical-align:top}
+.bulk-preview input{border:1px solid #e5e7eb;border-radius:4px;padding:3px 6px;font-size:12px;width:100%;font-family:inherit}
 
 /* Plan requests panel */
 .plan-req-bar{background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:12px 16px;margin-bottom:16px}
@@ -961,6 +1119,7 @@ td small{display:block;font-size:11px;color:#999;margin-top:2px}
   <h1>Main Mission — Coach Dashboard</h1>
   <div class="hdr-meta">
     <span id="hdr-date">—</span>
+    <button class="manage-ai-btn" onclick="openBulkPlan()" style="background:#0891b2">👥 Group Plan</button>
     <button class="manage-ai-btn" onclick="openManageAI()">⚙ Manage AI</button>
     <button class="refresh-btn" onclick="loadData()">↻ Refresh</button>
     <a href="/sysobservations" style="color:#8696a0;text-decoration:none;font-size:12px">🔍 System</a>
@@ -1019,6 +1178,7 @@ td small{display:block;font-size:11px;color:#999;margin-top:2px}
         <thead>
           <tr>
             <th>Runner</th>
+            <th>Group</th>
             <th>Race goal</th>
             <th>Weeks</th>
             <th>Today's session</th>
@@ -1027,7 +1187,7 @@ td small{display:block;font-size:11px;color:#999;margin-top:2px}
             <th>Actions</th>
           </tr>
         </thead>
-        <tbody id="tbody"><tr><td colspan="7" class="loading">Loading…</td></tr></tbody>
+        <tbody id="tbody"><tr><td colspan="8" class="loading">Loading…</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -1095,6 +1255,7 @@ td small{display:block;font-size:11px;color:#999;margin-top:2px}
     </select>
     <label>Injuries / niggles</label><input id="er-injuries" type="text" placeholder="e.g. Left knee niggle">
     <label>Monthly fee (₹)</label><input id="er-fee" type="number" placeholder="e.g. 2500">
+    <label>10K PB</label><input id="er-pb10k" type="text" placeholder="e.g. 62:30">
     <label>Notes</label><textarea id="er-notes" rows="2" placeholder="Any internal notes"></textarea>
     <div class="modal-actions">
       <button class="modal-cancel" onclick="closeEditRunner()">Cancel</button>
@@ -1114,6 +1275,7 @@ td small{display:block;font-size:11px;color:#999;margin-top:2px}
     <div class="mai-tabs">
       <div class="mai-tab active" onclick="switchMAITab('personality')">🧠 AI Personality</div>
       <div class="mai-tab" onclick="switchMAITab('rules')">📋 Rules &amp; Memory</div>
+      <div class="mai-tab" onclick="switchMAITab('groups')">👥 Groups</div>
     </div>
     <div class="mai-body">
       <!-- Personality tab -->
@@ -1163,9 +1325,85 @@ td small{display:block;font-size:11px;color:#999;margin-top:2px}
           </table>
         </div>
       </div>
+
+      <!-- Groups tab -->
+      <div class="mai-pane" id="mai-groups">
+        <div style="display:flex;align-items:center;gap:12px;flex-shrink:0">
+          <strong style="font-size:14px">Training Groups</strong>
+          <button class="btn-purple" onclick="showCreateGroup()" style="padding:5px 14px;font-size:12px">+ New Group</button>
+        </div>
+        <p style="font-size:12px;color:#666;margin-top:-8px">Groups are internal — runners never see them. Use them to bulk-assign workouts with the Group Plan button.</p>
+        <div id="mai-group-create" style="display:none;background:#f9f9f9;border-radius:10px;padding:14px;gap:10px;flex-direction:column">
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <input id="gc-name" type="text" placeholder="Group name (e.g. Elite, Beginner)"
+              style="flex:1;border:1px solid #ddd;border-radius:8px;padding:8px 12px;font-size:13px;outline:none">
+            <input id="gc-desc" type="text" placeholder="Description (optional)"
+              style="flex:2;border:1px solid #ddd;border-radius:8px;padding:8px 12px;font-size:13px;outline:none">
+          </div>
+          <div style="display:flex;align-items:center;gap:12px">
+            <label style="font-size:13px;font-weight:600">Colour:</label>
+            <div id="gc-colors" style="display:flex;gap:6px">
+              <span onclick="selectGroupColor('#e11d48')" data-c="#e11d48" class="gc-swatch" style="background:#e11d48"></span>
+              <span onclick="selectGroupColor('#2563eb')" data-c="#2563eb" class="gc-swatch" style="background:#2563eb"></span>
+              <span onclick="selectGroupColor('#16a34a')" data-c="#16a34a" class="gc-swatch" style="background:#16a34a"></span>
+              <span onclick="selectGroupColor('#d97706')" data-c="#d97706" class="gc-swatch" style="background:#d97706"></span>
+              <span onclick="selectGroupColor('#7c3aed')" data-c="#7c3aed" class="gc-swatch" style="background:#7c3aed"></span>
+              <span onclick="selectGroupColor('#0891b2')" data-c="#0891b2" class="gc-swatch" style="background:#0891b2"></span>
+              <span onclick="selectGroupColor('#db2777')" data-c="#db2777" class="gc-swatch" style="background:#db2777"></span>
+            </div>
+            <input id="gc-color-val" type="hidden" value="#2563eb">
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn-purple" onclick="createGroup()" style="padding:6px 16px;font-size:13px">Create Group</button>
+            <button class="btn-secondary" onclick="document.getElementById('mai-group-create').style.display='none'" style="padding:6px 16px;font-size:13px">Cancel</button>
+          </div>
+        </div>
+        <div id="mai-groups-list" style="display:flex;flex-direction:column;gap:10px"><div class="loading">Loading…</div></div>
+      </div>
     </div>
     <div class="mai-ftr">
       <button class="btn-secondary" onclick="closeManageAI()">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Bulk Group Plan Modal -->
+<div class="bulk-overlay" id="bulk-overlay" style="display:none" onclick="if(event.target===this)closeBulkPlan()">
+  <div class="bulk-modal">
+    <div class="bulk-hdr">
+      <span style="font-size:20px">👥</span>
+      <h2 style="flex:1;font-size:18px">Group Plan</h2>
+      <button class="close-btn" onclick="closeBulkPlan()">✕</button>
+    </div>
+    <div class="bulk-body">
+      <div>
+        <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px">Select groups</label>
+        <div class="bulk-group-select" id="bulk-group-select">
+          <span style="color:#aaa;font-size:13px">Loading groups…</span>
+        </div>
+      </div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap">
+        <div style="flex:1;min-width:180px">
+          <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px">Date</label>
+          <input type="date" id="bulk-date" style="border:1px solid #ddd;border-radius:8px;padding:8px 12px;font-size:13px;outline:none">
+        </div>
+      </div>
+      <div>
+        <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px">Instructions</label>
+        <textarea id="bulk-instructions" rows="4"
+          placeholder="e.g. Create an interval training session. Group A: 8×400m at 5K pace with 90s rest. Group B: 6×400m, 10 seconds slower than Group A with 2 min rest. Everyone: warm up 10 min easy before."
+          style="width:100%;border:1px solid #ddd;border-radius:8px;padding:10px 14px;font-size:13px;font-family:inherit;resize:vertical;outline:none;line-height:1.5"></textarea>
+      </div>
+      <div id="bulk-preview-section" style="display:none">
+        <label style="font-size:13px;font-weight:600;display:block;margin-bottom:8px">Preview — review and edit before saving</label>
+        <div class="bulk-preview" id="bulk-preview"></div>
+      </div>
+      <div id="bulk-status" style="font-size:13px;color:#666"></div>
+    </div>
+    <div class="bulk-ftr">
+      <button class="btn-secondary" onclick="closeBulkPlan()">Cancel</button>
+      <button class="btn-purple" id="bulk-generate-btn" onclick="generateBulkPlan()">Generate Plans</button>
+      <button class="btn-purple" id="bulk-save-btn" style="display:none;background:#16a34a" onclick="saveBulkPlan()">Save All Plans</button>
     </div>
   </div>
 </div>
@@ -1219,6 +1457,7 @@ td small{display:block;font-size:11px;color:#999;margin-top:2px}
 <script>
 let allRunners = [];
 let coaches    = [];
+let allGroups  = [];
 let activeFilter = 'all';
 let activeRunner = null;
 let _plansCache  = {};   // planId → full plan object for edit form pre-fill
@@ -1242,7 +1481,13 @@ async function loadData() {
 
     updateTiles();
     updateAlertBar();
-    renderTable();
+    if (coaches.length) {
+      const cid = coaches[0].id;
+      fetch(`/dashboard/api/groups?coach_id=${cid}`)
+        .then(r => r.json()).then(d => { allGroups = d.groups || []; renderTable(); });
+    } else {
+      renderTable();
+    }
     loadPlanRequests();
   } catch(e) {
     document.getElementById('tbody').innerHTML =
@@ -1364,11 +1609,9 @@ function renderTable() {
 
   if (rows.length === 0) {
     document.getElementById('tbody').innerHTML =
-      '<tr><td colspan="7" class="no-data">No runners match this filter</td></tr>';
+      '<tr><td colspan="8" class="no-data">No runners match this filter</td></tr>';
     return;
   }
-
-  const [sl, sc] = STATUS_LABELS[activeRunner?.runner_id ? 'pending' : 'pending'];
 
   document.getElementById('tbody').innerHTML = rows.map(r => {
     const [label, cls] = STATUS_LABELS[r.status] || ['—','s-no_plan'];
@@ -1377,6 +1620,10 @@ function renderTable() {
       ? `<span style="color:${r.last_dir==='inbound'?'#333':'#00a884'}">${r.last_dir==='inbound'?'←':'→'}</span> ${r.last_msg}`
       : '<span style="color:#ccc">No messages</span>';
     const selected = activeRunner?.runner_id === r.runner_id ? 'selected' : '';
+    const grp = allGroups.find(g => g.group_id === r.group_id);
+    const grpBadge = grp
+      ? `<span class="group-badge" style="background:${grp.color}">${grp.name}</span>`
+      : '<span style="color:#ccc;font-size:11px">—</span>';
     return `<tr class="runner-row ${selected}" onclick="openPanel('${r.runner_id}')">
       <td>
         <div class="name-cell">
@@ -1384,6 +1631,7 @@ function renderTable() {
           <div><strong>${r.name}</strong><small>${r.phone}</small></div>
         </div>
       </td>
+      <td>${grpBadge}</td>
       <td>${r.race_goal||'—'}<small>${r.weeks}</small></td>
       <td style="text-align:center">${r.weeks}</td>
       <td>${session}</td>
@@ -1532,6 +1780,17 @@ async function openPanel(runnerId, focusCompose = false) {
     <div class="profile-row"><span class="lbl">Injuries</span><span class="val">${inj}</span></div>
     ${r.additional_notes ? `<div style="background:#f0f9ff;border-radius:8px;padding:10px 12px;font-size:12px;color:#0369a1;margin-top:8px;line-height:1.5"><strong>Runner notes:</strong> ${r.additional_notes}</div>` : ''}
     ${r.notes ? `<div style="background:#f9f9f9;border-radius:8px;padding:10px 12px;font-size:12px;color:#555;margin-top:6px;line-height:1.5">${r.notes}</div>` : ''}
+    ${r.pb_10k ? `<div class="profile-row"><span class="lbl">10K PB</span><span class="val">${r.pb_10k}</span></div>` : ''}
+    <div class="profile-row">
+      <span class="lbl">Group</span>
+      <span class="val">
+        <select onchange="assignRunnerGroup('${r.runner_id}',this.value)"
+          style="border:1px solid #e5e7eb;border-radius:6px;padding:4px 8px;font-size:12px;outline:none">
+          <option value="">— No group —</option>
+          ${allGroups.map(g => `<option value="${g.group_id}" ${r.group_id === g.group_id ? 'selected' : ''}>${g.name}</option>`).join('')}
+        </select>
+      </span>
+    </div>
     <div style="display:flex;gap:8px;margin-top:16px">
       <button class="prof-edit-btn" onclick="openEditRunner('${r.runner_id}')">✏ Edit</button>
       <button class="prof-del-btn" onclick="deleteRunner('${r.runner_id}','${r.name}')">🗑 Delete runner</button>
@@ -1809,6 +2068,7 @@ function openEditRunner(runnerId) {
   document.getElementById('er-fitness').value   = r.fitness_level || '';
   document.getElementById('er-injuries').value  = r.injuries || '';
   document.getElementById('er-fee').value       = r.monthly_fee || '';
+  document.getElementById('er-pb10k').value     = r.pb_10k || '';
   document.getElementById('er-notes').value     = r.notes || '';
   document.getElementById('edit-runner-overlay').style.display = 'flex';
 }
@@ -1828,6 +2088,7 @@ async function saveEditRunner() {
     fitness_level: document.getElementById('er-fitness').value || null,
     injuries:      document.getElementById('er-injuries').value.trim() || null,
     monthly_fee:   document.getElementById('er-fee').value || null,
+    pb_10k:        document.getElementById('er-pb10k').value.trim() || null,
     notes:         document.getElementById('er-notes').value.trim() || null,
   };
   btn.disabled = true; btn.textContent = 'Saving…';
@@ -1870,6 +2131,244 @@ function toast(msg, isError = false) {
   setTimeout(() => t.classList.remove('show'), 3000);
 }
 
+// ── Groups ─────────────────────────────────────────────────────────────────────
+
+let selectedGroupColor = '#2563eb';
+
+function selectGroupColor(c) {
+  selectedGroupColor = c;
+  document.getElementById('gc-color-val').value = c;
+  document.querySelectorAll('.gc-swatch').forEach(s => s.classList.toggle('active', s.dataset.c === c));
+}
+
+function showCreateGroup() {
+  const el = document.getElementById('mai-group-create');
+  el.style.display = el.style.display === 'none' ? 'flex' : 'none';
+  selectGroupColor('#2563eb');
+}
+
+async function createGroup() {
+  const name = document.getElementById('gc-name').value.trim();
+  if (!name) { toast('Enter a group name', true); return; }
+  const desc  = document.getElementById('gc-desc').value.trim();
+  const color = document.getElementById('gc-color-val').value || '#2563eb';
+  await fetch('/dashboard/api/groups', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({coach_id: maiCoachId, name, description: desc, color}),
+  });
+  document.getElementById('gc-name').value = '';
+  document.getElementById('gc-desc').value = '';
+  document.getElementById('mai-group-create').style.display = 'none';
+  toast(`Group "${name}" created ✓`);
+  await loadGroups();
+  // Refresh global groups list for table badges
+  const gres = await fetch(`/dashboard/api/groups?coach_id=${maiCoachId}`);
+  allGroups = (await gres.json()).groups || [];
+  renderTable();
+}
+
+async function loadGroups() {
+  if (!maiCoachId) return;
+  const res  = await fetch(`/dashboard/api/groups?coach_id=${maiCoachId}`);
+  const data = await res.json();
+  const groups = data.groups || [];
+  const el = document.getElementById('mai-groups-list');
+  if (!groups.length) {
+    el.innerHTML = '<p style="color:#aaa;font-size:13px">No groups yet. Create one above.</p>';
+    return;
+  }
+  el.innerHTML = groups.map(g => {
+    const rCount = g.runner_count || 0;
+    // Runners in this group from allRunners
+    const groupRunners = allRunners.filter(r => r.group_id === g.group_id);
+    const runnerList = groupRunners.length
+      ? groupRunners.map(r => `<div class="group-runner-item">
+          <span>${r.name}</span>
+          <button class="act-btn del" style="padding:2px 8px;font-size:11px"
+            onclick="unassignRunner('${r.runner_id}','${g.group_id}')">Remove</button>
+        </div>`).join('')
+      : '<div style="color:#aaa;font-size:12px;padding:4px 0">No runners assigned</div>';
+    return `<div class="group-card">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+        <span class="gc-dot" style="background:${g.color}"></span>
+        <span class="gc-name">${g.name}</span>
+        <span class="gc-count">${rCount} runner${rCount !== 1 ? 's' : ''}</span>
+        <button class="act-btn del" style="margin-left:auto;padding:2px 8px;font-size:11px"
+          onclick="deleteGroup('${g.group_id}','${g.name}')">Delete</button>
+      </div>
+      ${g.description ? `<div style="font-size:12px;color:#888;margin-bottom:6px">${g.description}</div>` : ''}
+      <div class="group-runner-list">${runnerList}</div>
+    </div>`;
+  }).join('');
+}
+
+async function assignRunnerGroup(runnerId, groupId) {
+  await fetch(`/dashboard/api/runner/${runnerId}/group`, {
+    method: 'PUT', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({group_id: groupId}),
+  });
+  const r = allRunners.find(x => x.runner_id === runnerId);
+  if (r) r.group_id = groupId;
+  renderTable();
+  toast(groupId ? 'Runner assigned to group ✓' : 'Runner removed from group');
+}
+
+async function unassignRunner(runnerId, groupId) {
+  await fetch(`/dashboard/api/runner/${runnerId}/group`, {
+    method: 'PUT', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({group_id: ''}),
+  });
+  const r = allRunners.find(x => x.runner_id === runnerId);
+  if (r) r.group_id = '';
+  await loadGroups();
+  renderTable();
+}
+
+async function deleteGroup(groupId, name) {
+  if (!confirm(`Delete group "${name}"? Runners will be unassigned.`)) return;
+  await fetch(`/dashboard/api/group/${groupId}`, {method:'DELETE'});
+  allGroups = allGroups.filter(g => g.group_id !== groupId);
+  allRunners.forEach(r => { if (r.group_id === groupId) r.group_id = ''; });
+  toast(`Group "${name}" deleted`);
+  await loadGroups();
+  renderTable();
+}
+
+// ── Bulk Group Plan ────────────────────────────────────────────────────────────
+
+let bulkGeneratedSessions = [];
+
+async function openBulkPlan() {
+  if (!coaches.length) { toast('No coaches found', true); return; }
+  const cid = coaches[0].id;
+  document.getElementById('bulk-overlay').style.display = 'flex';
+  document.getElementById('bulk-date').value = new Date().toISOString().slice(0,10);
+  document.getElementById('bulk-preview-section').style.display = 'none';
+  document.getElementById('bulk-save-btn').style.display = 'none';
+  document.getElementById('bulk-status').textContent = '';
+  bulkGeneratedSessions = [];
+
+  // Load groups
+  const res = await fetch(`/dashboard/api/groups?coach_id=${cid}`);
+  const data = await res.json();
+  const groups = data.groups || [];
+  const sel = document.getElementById('bulk-group-select');
+  if (!groups.length) {
+    sel.innerHTML = '<span style="color:#aaa;font-size:13px">No groups yet — create some in ⚙ Manage AI → Groups first.</span>';
+    return;
+  }
+  sel.innerHTML = groups.map(g =>
+    `<span class="bulk-group-chip" data-id="${g.group_id}" style="--c:${g.color};border-color:${g.color};color:${g.color}"
+      onclick="toggleBulkGroup(this,'${g.color}')">${g.name}</span>`
+  ).join('');
+}
+
+function toggleBulkGroup(el, color) {
+  el.classList.toggle('active');
+  if (el.classList.contains('active')) {
+    el.style.background = color;
+    el.style.color = '#fff';
+  } else {
+    el.style.background = '';
+    el.style.color = color;
+  }
+}
+
+function closeBulkPlan() {
+  document.getElementById('bulk-overlay').style.display = 'none';
+}
+
+async function generateBulkPlan() {
+  const cid = coaches[0]?.id;
+  const group_ids = [...document.querySelectorAll('.bulk-group-chip.active')].map(el => el.dataset.id);
+  const instructions = document.getElementById('bulk-instructions').value.trim();
+  const date = document.getElementById('bulk-date').value;
+
+  if (!group_ids.length) { toast('Select at least one group', true); return; }
+  if (!instructions)     { toast('Enter instructions', true); return; }
+  if (!date)             { toast('Select a date', true); return; }
+
+  const btn = document.getElementById('bulk-generate-btn');
+  btn.textContent = 'Generating…';
+  btn.disabled = true;
+  document.getElementById('bulk-status').textContent = 'Asking AI to generate plans for each runner…';
+
+  try {
+    const res  = await fetch('/dashboard/api/groups/bulk-plan', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({coach_id: cid, instructions, date, group_ids}),
+    });
+    const data = await res.json();
+    if (data.error) { toast(data.error, true); return; }
+
+    bulkGeneratedSessions = data.sessions || [];
+    renderBulkPreview(bulkGeneratedSessions);
+    document.getElementById('bulk-preview-section').style.display = 'block';
+    document.getElementById('bulk-save-btn').style.display = 'inline-block';
+    document.getElementById('bulk-status').textContent = `${bulkGeneratedSessions.length} plans generated. Review and edit below.`;
+  } catch(e) {
+    toast('Generation failed — try again', true);
+  } finally {
+    btn.textContent = 'Generate Plans';
+    btn.disabled = false;
+  }
+}
+
+function renderBulkPreview(sessions) {
+  document.getElementById('bulk-preview').innerHTML = `
+    <table>
+      <thead><tr>
+        <th>Runner</th><th>Group</th><th>Session</th><th>Distance</th>
+        <th>Reps × m</th><th>Intensity</th><th>RPE</th><th>Coach notes</th>
+      </tr></thead>
+      <tbody>${sessions.map((s,i) => `<tr>
+        <td style="white-space:nowrap;font-weight:600">${s.runner_name||s.runner_id}</td>
+        <td><span class="group-badge" style="background:${allGroups.find(g=>g.name===s.group_name)?.color||'#888'}">${s.group_name||'—'}</span></td>
+        <td><input value="${s.session_type||''}" onchange="bulkGeneratedSessions[${i}].session_type=this.value" style="width:110px"></td>
+        <td><input type="number" value="${s.distance_km||0}" onchange="bulkGeneratedSessions[${i}].distance_km=+this.value" style="width:55px"></td>
+        <td><input value="${s.reps&&s.rep_distance_m?s.reps+'×'+s.rep_distance_m:''}"
+          placeholder="8×400"
+          onchange="(function(v,i){const m=v.match(/(\\d+)[×x](\\d+)/);if(m){bulkGeneratedSessions[i].reps=+m[1];bulkGeneratedSessions[i].rep_distance_m=+m[2]}})(this.value,${i})"
+          style="width:70px"></td>
+        <td><input value="${s.intensity||''}" onchange="bulkGeneratedSessions[${i}].intensity=this.value" style="width:90px"></td>
+        <td><input value="${s.rpe_target||''}" onchange="bulkGeneratedSessions[${i}].rpe_target=this.value" style="width:55px"></td>
+        <td><input value="${(s.coach_notes||'').replace(/"/g,'&quot;')}" onchange="bulkGeneratedSessions[${i}].coach_notes=this.value" style="width:200px"></td>
+      </tr>`).join('')}
+      </tbody>
+    </table>`;
+}
+
+async function saveBulkPlan() {
+  const btn = document.getElementById('bulk-save-btn');
+  btn.textContent = 'Saving…';
+  btn.disabled = true;
+  let saved = 0;
+  for (const s of bulkGeneratedSessions) {
+    const payload = {
+      runner_id: s.runner_id,
+      date: document.getElementById('bulk-date').value,
+      day_type: s.day_type || 'Run',
+      session_type: s.session_type || 'Run',
+      distance_km: s.distance_km || 0,
+      duration_min: s.duration_min || 0,
+      reps: s.reps || '',
+      rep_distance_m: s.rep_distance_m || '',
+      intensity: s.intensity || '',
+      rpe_target: s.rpe_target || '',
+      coach_notes: s.coach_notes || '',
+    };
+    await fetch('/dashboard/api/plan', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(payload),
+    });
+    saved++;
+  }
+  toast(`✓ ${saved} plans saved`);
+  closeBulkPlan();
+  btn.textContent = 'Save All Plans';
+  btn.disabled = false;
+}
+
 // ── Manage AI ─────────────────────────────────────────────────────────────────
 
 let maiCoachId = null;
@@ -1889,9 +2388,10 @@ function closeManageAI() {
 }
 
 function switchMAITab(name) {
-  document.querySelectorAll('.mai-tab').forEach((t,i) => t.classList.toggle('active', ['personality','rules'][i] === name));
+  document.querySelectorAll('.mai-tab').forEach((t,i) => t.classList.toggle('active', ['personality','rules','groups'][i] === name));
   document.querySelectorAll('.mai-pane').forEach(p => p.classList.remove('active'));
   document.getElementById('mai-' + name).classList.add('active');
+  if (name === 'groups') loadGroups();
 }
 
 async function loadPrompt() {

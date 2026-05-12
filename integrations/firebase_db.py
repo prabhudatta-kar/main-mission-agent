@@ -634,6 +634,37 @@ class FirebaseClient:
         msgs.sort(key=lambda m: m.get("timestamp", ""))
         return msgs[-limit:]
 
+    # ── Groups ───────────────────────────────────────────────────────────────
+
+    def create_group(self, coach_id: str, name: str,
+                     description: str = "", color: str = "#2563eb") -> str:
+        group_id = f"GRP_{str(uuid.uuid4())[:6].upper()}"
+        self._col("groups").document(group_id).set({
+            "group_id":    group_id,
+            "coach_id":    coach_id,
+            "name":        name,
+            "description": description,
+            "color":       color,
+            "created_at":  _now_ist(),
+        })
+        logger.info(f"Created group {group_id} '{name}' for coach {coach_id}")
+        return group_id
+
+    def get_coach_groups(self, coach_id: str) -> list:
+        return self._stream(self._col("groups").where("coach_id", "==", coach_id))
+
+    def update_group(self, group_id: str, fields: dict):
+        self._col("groups").document(group_id).update(fields)
+
+    def delete_group(self, group_id: str):
+        # Unassign all runners in this group first
+        for runner in self.get_group_runners(group_id):
+            self._col("runners").document(runner["runner_id"]).update({"group_id": ""})
+        self._col("groups").document(group_id).delete()
+
+    def get_group_runners(self, group_id: str) -> list:
+        return self._stream(self._col("runners").where("group_id", "==", group_id))
+
     # ── Platform Log ──────────────────────────────────────────────────────────
 
     def log_platform_event(self, event_type: str, runner_id: str, coach_id: str,
