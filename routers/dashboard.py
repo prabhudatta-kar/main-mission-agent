@@ -742,20 +742,23 @@ _PROFILE_FIELD_QUESTIONS = {
     "current_easy_pace": "What pace do you typically run your easy runs at (per km)?",
 }
 
-class AskProfileReq(BaseModel):
-    field: str
-
 @router.post("/api/runner/{runner_id}/ask-profile")
-async def api_ask_profile(runner_id: str, req: AskProfileReq):
-    """Send a targeted question to collect a missing profile field.
-    Uses send_text if the 24h window is open, mm_question_general template otherwise."""
+async def api_ask_profile(runner_id: str):
+    """Send the first missing profile question to the runner.
+    Uses send_text if 24h window is open, mm_question_general template if closed."""
     runner = sheets.get_runner(runner_id)
     if not runner:
         return JSONResponse({"error": "Runner not found"}, status_code=404)
 
-    question = _PROFILE_FIELD_QUESTIONS.get(req.field)
+    # Find the first missing field and ask for it
+    question = None
+    for field, q in _PROFILE_FIELD_QUESTIONS.items():
+        if not runner.get(field):
+            question = q
+            break
+
     if not question:
-        return JSONResponse({"error": "Unknown field"}, status_code=400)
+        return {"ok": True, "method": "none", "message": "Profile already complete"}
 
     window_open = sheets.is_within_session_window(runner_id)
     await send_runner_message(runner, question)
@@ -1816,17 +1819,17 @@ async function openPanel(runnerId, focusCompose = false) {
     ${r.current_easy_pace ? `<div class="profile-row"><span class="lbl">Easy pace</span><span class="val">${r.current_easy_pace}/km</span></div>` : ''}
     ${(function() {
       const missing = [];
-      if (!r.pb_10k) missing.push({field:'pb_10k', label:'10K PB'});
-      if (!r.pb_5k)  missing.push({field:'pb_5k',  label:'5K PB'});
-      if (!r.current_easy_pace) missing.push({field:'current_easy_pace', label:'Easy pace'});
-      if (!missing.length) return '';
-      return `<div style="margin-top:12px;padding:10px 12px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px">
-        <div style="font-size:12px;font-weight:600;color:#92400e;margin-bottom:6px">⚠ Missing profile data</div>
-        ${missing.map(m => `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
-          <span style="font-size:12px;color:#555">${m.label}</span>
-          <button id="ask-btn-${m.field}" class="act-btn" style="font-size:11px"
-            onclick="askRunnerField('${r.runner_id}','${m.field}',this)">📬 Ask runner</button>
-        </div>`).join('')}
+      if (!r.pb_10k) missing.push('10K PB');
+      if (!r.pb_5k)  missing.push('5K PB');
+      if (!r.current_easy_pace) missing.push('Easy pace');
+      if (!missing.length) return '<div style="font-size:12px;color:#16a34a;margin-top:6px">✓ Profile complete</div>';
+      return `<div style="margin-top:12px;padding:10px 12px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;display:flex;align-items:center;justify-content:space-between;gap:12px">
+        <div>
+          <div style="font-size:12px;font-weight:600;color:#92400e">⚠ Missing: ${missing.join(', ')}</div>
+          <div style="font-size:11px;color:#a16207;margin-top:2px">Agent will collect these over time — or ask now</div>
+        </div>
+        <button id="ask-btn-profile" class="act-btn" style="font-size:11px;white-space:nowrap"
+          onclick="askRunnerProfile('${r.runner_id}',this)">📬 Ask runner</button>
       </div>`;
     })()}
     <div class="profile-row">
@@ -2250,26 +2253,24 @@ async function loadGroups() {
   }).join('');
 }
 
-async function askRunnerField(runnerId, field, btn) {
+async function askRunnerProfile(runnerId, btn) {
   btn.textContent = 'Sending…';
   btn.disabled = true;
   try {
     const res  = await fetch(`/dashboard/api/runner/${runnerId}/ask-profile`, {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({field}),
+      body: JSON.stringify({}),
     });
     const data = await res.json();
     if (data.ok) {
-      const method = data.method === 'template' ? 'via template (window closed)' : 'via WhatsApp';
-      btn.textContent = `✓ Sent ${method}`;
+      const via = data.method === 'template' ? 'template (window closed)' : 'WhatsApp';
+      btn.textContent = `✓ Sent via ${via}`;
       btn.style.color = '#16a34a';
     } else {
-      btn.textContent = 'Failed';
-      btn.disabled = false;
+      btn.textContent = 'Failed'; btn.disabled = false;
     }
   } catch(e) {
-    btn.textContent = 'Failed';
-    btn.disabled = false;
+    btn.textContent = 'Failed'; btn.disabled = false;
   }
 }
 
