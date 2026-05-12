@@ -80,6 +80,53 @@ def _log_inbound_only(runner_id: str, coach_id: str, message: str):
     })
 
 
+# Fields the AI will progressively collect — ordered by coaching importance
+# key = runner document field, value = human description used in prompts
+PROFILE_FIELDS = {
+    "pb_10k":             "10K personal best time",
+    "pb_5k":              "5K personal best time",
+    "current_easy_pace":  "typical easy run pace per km",
+}
+
+
+def _missing_profile_fields(runner: dict) -> dict:
+    """Return ordered dict of fields that are empty on this runner's profile."""
+    return {
+        k: v for k, v in PROFILE_FIELDS.items()
+        if not runner.get(k)
+    }
+
+
+async def _extract_and_save_profile_data(runner_id: str, message: str, missing: dict):
+    """
+    After the AI responds, check if the runner's message contained any profile data.
+    Runs fire-and-forget so it never delays the response.
+    """
+    if not missing:
+        return
+    fields_desc = "\n".join(f"- {k}: {v}" for k, v in missing.items())
+    try:
+        raw = await llm.complete([
+            {"role": "system",
+             "content": (
+                 "Extract runner profile data from a WhatsApp message. "
+                 "Return a JSON object with only the keys that were clearly stated. "
+                 "If nothing was mentioned, return {}. "
+                 "Keys to look for:\n" + fields_desc
+             )},
+            {"role": "user", "content": f"Runner message: \"{message}\""},
+        ], max_tokens=80)
+        raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        updates = json.loads(raw)
+        if updates and isinstance(updates, dict):
+            clean = {k: str(v) for k, v in updates.items() if k in PROFILE_FIELDS and v}
+            if clean:
+                sheets.update_runner(runner_id, clean)
+                logger.info(f"Profile enriched for {runner_id}: {clean}")
+    except Exception as e:
+        logger.debug(f"Profile extraction skipped for {runner_id}: {e}")
+
+
 def _no_plan_response(runner_data: dict) -> str:
     first = (runner_data.get("name") or "").split()[0]
     if not first or first == "New":
@@ -161,6 +208,17 @@ CONVERSATION RULES:
 - When answering questions about nutrition, pacing, or training science, use the coaching context provided — do not default to generic internet advice.
 - Keep replies to 2-3 sentences maximum. If the answer is one sentence, that is fine.
 - NEVER create training plans, suggest specific workout schedules, or prescribe distances, durations, or paces from your own knowledge. The coach creates the plan — not you. If the runner asks for a plan or workout and none exists in the data above, say: their coach will set one up within 24 hours and they can message the coach directly if they need it sooner."""
+
+    # If profile data is missing, give the LLM permission to ask for ONE field naturally
+    missing = _missing_profile_fields(runner)
+    if missing:
+        field_name, field_desc = next(iter(missing.items()))
+        system_msg += (
+            f"\n\nPROFILE GAP: The runner's {field_desc} is not on record. "
+            f"If it comes up naturally in this conversation — or if you're giving pace/training advice "
+            f"that would benefit from it — ask for it as part of your reply. "
+            f"One question only. Don't force it if the conversation isn't about training specifics."
+        )
 
 
     # ── Runner context ─────────────────────────────────────────────────────────
@@ -284,6 +342,12 @@ async def generate_runner_response(sender: dict, message: str) -> dict:
 
     sheets.log_conversation(runner_id, coach_id, message, response, intent)
     sheets.update_plan_feedback(runner_id, message)
+
+    # Fire-and-forget: extract any profile data the runner may have mentioned
+    missing = _missing_profile_fields(runner_data)
+    if missing:
+        import asyncio
+        asyncio.create_task(_extract_and_save_profile_data(runner_id, message, missing))
 
     return {"response": response, "intent": intent}
 

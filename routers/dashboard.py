@@ -734,6 +734,37 @@ async def api_bulk_plan(req: BulkPlanReq):
     return {"sessions": sessions, "date": req.date}
 
 
+# ── Profile enrichment ────────────────────────────────────────────────────────
+
+_PROFILE_FIELD_QUESTIONS = {
+    "pb_10k":            "Quick one — what's your 10K PB? Even a rough time helps your coach set the right paces for you.",
+    "pb_5k":             "Do you have a recent 5K time? Helps calibrate your training zones.",
+    "current_easy_pace": "What pace do you typically run your easy runs at (per km)?",
+}
+
+class AskProfileReq(BaseModel):
+    field: str
+
+@router.post("/api/runner/{runner_id}/ask-profile")
+async def api_ask_profile(runner_id: str, req: AskProfileReq):
+    """Send a targeted question to collect a missing profile field.
+    Uses send_text if the 24h window is open, mm_question_general template otherwise."""
+    runner = sheets.get_runner(runner_id)
+    if not runner:
+        return JSONResponse({"error": "Runner not found"}, status_code=404)
+
+    question = _PROFILE_FIELD_QUESTIONS.get(req.field)
+    if not question:
+        return JSONResponse({"error": "Unknown field"}, status_code=400)
+
+    window_open = sheets.is_within_session_window(runner_id)
+    await send_runner_message(runner, question)
+    sheets.log_conversation(runner_id, runner.get("coach_id", ""),
+                            inbound="", outbound=question, intent="profile_enrichment")
+
+    return {"ok": True, "method": "text" if window_open else "template"}
+
+
 # ── Media proxy ───────────────────────────────────────────────────────────────
 
 @router.get("/api/media/proxy")
@@ -1781,6 +1812,23 @@ async function openPanel(runnerId, focusCompose = false) {
     ${r.additional_notes ? `<div style="background:#f0f9ff;border-radius:8px;padding:10px 12px;font-size:12px;color:#0369a1;margin-top:8px;line-height:1.5"><strong>Runner notes:</strong> ${r.additional_notes}</div>` : ''}
     ${r.notes ? `<div style="background:#f9f9f9;border-radius:8px;padding:10px 12px;font-size:12px;color:#555;margin-top:6px;line-height:1.5">${r.notes}</div>` : ''}
     ${r.pb_10k ? `<div class="profile-row"><span class="lbl">10K PB</span><span class="val">${r.pb_10k}</span></div>` : ''}
+    ${r.pb_5k  ? `<div class="profile-row"><span class="lbl">5K PB</span><span class="val">${r.pb_5k}</span></div>` : ''}
+    ${r.current_easy_pace ? `<div class="profile-row"><span class="lbl">Easy pace</span><span class="val">${r.current_easy_pace}/km</span></div>` : ''}
+    ${(function() {
+      const missing = [];
+      if (!r.pb_10k) missing.push({field:'pb_10k', label:'10K PB'});
+      if (!r.pb_5k)  missing.push({field:'pb_5k',  label:'5K PB'});
+      if (!r.current_easy_pace) missing.push({field:'current_easy_pace', label:'Easy pace'});
+      if (!missing.length) return '';
+      return `<div style="margin-top:12px;padding:10px 12px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px">
+        <div style="font-size:12px;font-weight:600;color:#92400e;margin-bottom:6px">⚠ Missing profile data</div>
+        ${missing.map(m => `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+          <span style="font-size:12px;color:#555">${m.label}</span>
+          <button id="ask-btn-${m.field}" class="act-btn" style="font-size:11px"
+            onclick="askRunnerField('${r.runner_id}','${m.field}',this)">📬 Ask runner</button>
+        </div>`).join('')}
+      </div>`;
+    })()}
     <div class="profile-row">
       <span class="lbl">Group</span>
       <span class="val">
@@ -2200,6 +2248,29 @@ async function loadGroups() {
       <div class="group-runner-list">${runnerList}</div>
     </div>`;
   }).join('');
+}
+
+async function askRunnerField(runnerId, field, btn) {
+  btn.textContent = 'Sending…';
+  btn.disabled = true;
+  try {
+    const res  = await fetch(`/dashboard/api/runner/${runnerId}/ask-profile`, {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({field}),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      const method = data.method === 'template' ? 'via template (window closed)' : 'via WhatsApp';
+      btn.textContent = `✓ Sent ${method}`;
+      btn.style.color = '#16a34a';
+    } else {
+      btn.textContent = 'Failed';
+      btn.disabled = false;
+    }
+  } catch(e) {
+    btn.textContent = 'Failed';
+    btn.disabled = false;
+  }
 }
 
 async function assignRunnerGroup(runnerId, groupId) {
