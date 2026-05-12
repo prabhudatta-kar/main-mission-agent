@@ -69,8 +69,9 @@ async def webhook(request: Request, token: str = Query(default="")):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     msg_type = data.get("type", "")
-    if msg_type not in ("text", "message", "image", ""):
-        logger.info(f"Webhook ignored msg_type='{msg_type}'")
+    logger.info(f"Webhook received msg_type='{msg_type}' keys={list(data.keys())}")
+    # Only hard-filter obvious non-message types (status updates, delivery receipts)
+    if msg_type in ("message_status_update", "status", "read"):
         return {"status": "ignored", "type": msg_type}
 
     # Deduplicate: Wati retries if we take >~7s; fire-and-forget so we reply instantly

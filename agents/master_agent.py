@@ -19,12 +19,27 @@ async def handle_incoming(data: dict):
     msg_type = data.get("type", "")
     phone    = data.get("waId") or data.get("phone")
 
+    # Detect image-type messages — Wati may use "image", "picture", or put media in a "media" field
+    is_image = (
+        msg_type == "image"
+        or bool(data.get("image"))
+        or (isinstance(data.get("media"), dict) and data["media"].get("url"))
+    )
+
+    if is_image:
+        logger.info(f"Image webhook detected — type='{msg_type}' payload={data}")
+    elif msg_type not in ("text", "message", ""):
+        logger.info(f"Unknown webhook type='{msg_type}' — full payload: {data}")
+        # Don't process unknown non-image, non-text types
+        if not phone:
+            return
+
     # Wati sends text as a plain string; for image messages text is null
     text_field = data.get("text") or ""
     message    = text_field if isinstance(text_field, str) else (text_field.get("body", "") if text_field else "")
 
     # For image messages allow empty message (caption may be blank)
-    if not phone or (not message and msg_type != "image"):
+    if not phone or (not message and not is_image):
         logger.debug("Skipping webhook event — no phone or message body")
         return
 
@@ -36,10 +51,11 @@ async def handle_incoming(data: dict):
         runner_data = sender["data"]
 
         # Image message — handle separately regardless of onboarding state
-        if msg_type == "image":
-            img   = data.get("image") or {}
-            media_id = img.get("id", "") or data.get("mediaId", "")
-            caption  = img.get("caption", "") or ""
+        if is_image:
+            img      = data.get("image") or data.get("media") or {}
+            media_id = img.get("id", "") or img.get("mediaId", "") or data.get("mediaId", "")
+            caption  = img.get("caption", "") or data.get("caption", "") or ""
+            logger.info(f"Image message: media_id={media_id!r} caption={caption!r}")
             if media_id and str(runner_data.get("onboarded", "TRUE")).upper() == "TRUE":
                 await handle_runner_image(sender, media_id, caption)
                 return
