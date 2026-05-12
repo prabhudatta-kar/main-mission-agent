@@ -3,7 +3,7 @@ import logging
 from config.settings import DEFAULT_COACH_ID, SUPPORT_EMAIL
 from integrations.firebase_db import sheets
 from integrations.whatsapp import whatsapp
-from agents.coach_agent import handle_runner_message, handle_coach_message, generate_runner_response
+from agents.coach_agent import handle_runner_message, handle_coach_message, generate_runner_response, handle_runner_image
 from agents.onboarding_agent import is_onboarding, start_onboarding, handle_onboarding
 
 logger = logging.getLogger(__name__)
@@ -32,6 +32,20 @@ async def handle_incoming(data: dict):
 
     if sender["type"] == "runner":
         runner_data = sender["data"]
+
+        # Image message — handle separately regardless of onboarding state
+        if msg_type == "image":
+            img   = data.get("image") or {}
+            media_id = img.get("id", "") or data.get("mediaId", "")
+            caption  = img.get("caption", "") or ""
+            if media_id and str(runner_data.get("onboarded", "TRUE")).upper() == "TRUE":
+                await handle_runner_image(sender, media_id, caption)
+                return
+            # During onboarding or no media_id — treat as text if there's a caption
+            if not caption:
+                return
+            message = caption
+
         if str(runner_data.get("onboarded", "TRUE")).upper() == "FALSE":
             response = await _run_onboarding(normalized, sender, message)
             await whatsapp.send_text(runner_data["phone"], response)

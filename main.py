@@ -69,7 +69,7 @@ async def webhook(request: Request, token: str = Query(default="")):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     msg_type = data.get("type", "")
-    if msg_type not in ("text", "message", ""):
+    if msg_type not in ("text", "message", "image", ""):
         logger.info(f"Webhook ignored msg_type='{msg_type}'")
         return {"status": "ignored", "type": msg_type}
 

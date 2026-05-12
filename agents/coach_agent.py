@@ -324,6 +324,63 @@ Return JSON:
         return "Tell me more about the race you signed up for and I'll add it to your schedule."
 
 
+async def handle_runner_image(sender: dict, media_id: str, caption: str = ""):
+    """
+    Runner sent an image (workout screenshot, Garmin/Strava/Apple Watch, etc.).
+    Downloads from Wati, sends to GPT-4o vision, extracts stats + replies naturally.
+    """
+    import base64
+    runner_id   = sender["id"]
+    coach_id    = sender["coach_id"]
+    runner_data = sheets.get_runner(runner_id) or sender.get("data", {})
+    phone       = runner_data.get("phone", "")
+
+    try:
+        image_bytes, mime_type = await whatsapp.get_media_bytes(media_id)
+        image_b64 = base64.b64encode(image_bytes).decode()
+    except Exception as e:
+        logger.error(f"Failed to download media {media_id} for {runner_id}: {e}")
+        await whatsapp.send_text(phone, "Got your image but couldn't read it — can you share the key stats as text?")
+        return
+
+    first = (runner_data.get("name") or "there").split()[0]
+    race  = runner_data.get("race_goal", "")
+
+    system = (
+        "You are a running coach receiving a workout screenshot from a runner on WhatsApp. "
+        "Extract all visible workout stats (distance, time, pace, heart rate, elevation, "
+        "cadence, calories, power, splits — whatever is visible). "
+        "Then reply as a coach would: acknowledge the specific numbers, give one short "
+        "observation or piece of feedback based on what you see. "
+        "2-3 sentences max. Plain text. No markdown. Do not start with the runner's name."
+    )
+    text_prompt = (
+        f"Runner: {first}"
+        + (f", training for {race}" if race else "")
+        + f". Caption with image: \"{caption}\"" if caption else ""
+        + ". Extract the stats and respond as their coach."
+    )
+
+    try:
+        response = await llm.complete_with_image(system, text_prompt, image_b64, mime_type)
+    except Exception as e:
+        logger.error(f"Vision call failed for {runner_id}: {e}")
+        response = "Got your workout — can you tell me the key numbers (distance, pace, HR) so I can give you proper feedback?"
+
+    # Log with media_id so dashboard can display the image
+    sheets.log_conversation(
+        runner_id, coach_id,
+        inbound=caption or "[image]",
+        outbound=response,
+        intent="image_upload",
+        media_id=media_id,
+        media_type="image",
+    )
+
+    await whatsapp.send_text(phone, response)
+    logger.info(f"Image processed for {runner_id} (media={media_id})")
+
+
 async def handle_runner_message(sender: dict, message: str):
     """Full runner pipeline including WhatsApp send and escalation check."""
     result = await generate_runner_response(sender, message)

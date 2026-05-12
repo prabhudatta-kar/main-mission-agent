@@ -461,7 +461,8 @@ class FirebaseClient:
             for rid, msgs in all_msgs.items()
         }
 
-    def log_conversation(self, runner_id: str, coach_id: str, inbound: str, outbound: str, intent: str):
+    def log_conversation(self, runner_id: str, coach_id: str, inbound: str, outbound: str,
+                         intent: str, media_id: str = "", media_type: str = ""):
         ts = _now_ist()
         base_id = f"LOG_{str(uuid.uuid4())[:6].upper()}"
         col = self._col("conversations")
@@ -469,9 +470,9 @@ class FirebaseClient:
             (base_id,       "inbound",  inbound),
             (base_id + "_r","outbound", outbound),
         ]:
-            if not message:   # skip empty records — they appear as phantom bubbles in the dashboard
-                continue
-            col.document(log_id).set({
+            if not message and not (direction == "inbound" and media_id):
+                continue  # skip empty records — they appear as phantom bubbles
+            doc = {
                 "log_id":            log_id,
                 "timestamp":         ts,
                 "runner_id":         runner_id,
@@ -482,7 +483,11 @@ class FirebaseClient:
                 "handled_by":        "agent",
                 "escalated":         False,
                 "escalation_reason": "",
-            })
+            }
+            if direction == "inbound" and media_id:
+                doc["media_id"]   = media_id
+                doc["media_type"] = media_type or "image"
+            col.document(log_id).set(doc)
 
     # ── System Prompts (dynamic, editable from dashboard) ────────────────────
 

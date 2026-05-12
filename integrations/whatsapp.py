@@ -65,6 +65,20 @@ class WhatsAppClient:
                 logger.error(f"WhatsApp send_template request error for {phone}: {e}")
 
 
+    async def get_media_bytes(self, media_id: str) -> tuple[bytes, str]:
+        """Download media from Wati. Returns (bytes, mime_type)."""
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{self._base}/api/v1/getMedia/{media_id}",
+                headers=self._headers,
+                timeout=20,
+                follow_redirects=True,
+            )
+            resp.raise_for_status()
+            mime = resp.headers.get("content-type", "image/jpeg").split(";")[0].strip()
+            return resp.content, mime
+
+
 whatsapp = WhatsAppClient()
 
 
