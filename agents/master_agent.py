@@ -54,15 +54,43 @@ async def handle_incoming(data: dict):
     if sender["type"] == "runner":
         runner_data = sender["data"]
 
-        # Audio/voice note
+        # Audio/voice note — transcribe immediately so both onboarding and
+        # normal flow receive plain text; don't silently drop during onboarding
         if is_audio:
             audio_url = data.get("data", "") if isinstance(data.get("data"), str) else ""
             logger.info(f"Voice note: url={audio_url!r}")
-            if audio_url and str(runner_data.get("onboarded", "TRUE")).upper() == "TRUE":
-                await handle_runner_audio(sender, audio_url)
+            if not audio_url:
                 return
-            # No URL or during onboarding — ignore
-            return
+            try:
+                import httpx
+                from config.settings import WATI_API_TOKEN as _TOK
+                from integrations.llm import llm as _llm
+                async with httpx.AsyncClient() as _c:
+                    _r = await _c.get(audio_url, headers={"Authorization": f"Bearer {_TOK}"},
+                                      timeout=30, follow_redirects=True)
+                    _r.raise_for_status()
+                    _mime = _r.headers.get("content-type", "audio/ogg").split(";")[0].strip()
+                    transcript = await _llm.transcribe(_r.content, _mime)
+            except Exception as e:
+                logger.error(f"Voice note transcription failed for {normalized}: {e}")
+                await whatsapp.send_text(normalized, "Couldn't hear that clearly. Could you type it instead?")
+                return
+            if not transcript:
+                await whatsapp.send_text(normalized, "Couldn't hear that clearly. Could you type it instead?")
+                return
+            logger.info(f"Voice note transcribed for {normalized}: {transcript[:80]}")
+
+            if str(runner_data.get("onboarded", "TRUE")).upper() == "TRUE":
+                # Onboarded runner — full pipeline with [Voice note] log prefix
+                from agents.coach_agent import generate_runner_response as _gen
+                result = await _gen(sender, transcript,
+                                    inbound_override=f"[Voice note] {transcript}")
+                if result.get("response"):
+                    await whatsapp.send_text(runner_data["phone"], result["response"])
+                return
+            else:
+                # During onboarding — treat transcript as typed text and fall through
+                message = transcript
 
         # Image message — Wati sends URL in data["data"], caption in data["text"]
         if is_image:
