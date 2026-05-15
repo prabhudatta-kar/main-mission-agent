@@ -117,9 +117,13 @@ async def send_runner_message(runner: dict, message: str):
                 if answer.startswith(prefix):
                     answer = answer[len(prefix):].lstrip()
                     break
+        # Wati template parameters reject newlines, tabs, and 5+ consecutive spaces.
+        import re
+        answer_clean = answer.replace("\n", " ").replace("\t", " ")
+        answer_clean = re.sub(r" {5,}", "    ", answer_clean).strip()
         await whatsapp.send_template(
             phone=phone,
             template_name="mm_question_general",
-            variables={"first_name": first, "answer": answer[:1024]},
+            variables={"first_name": first, "answer": answer_clean[:1024]},
         )
         logger.info(f"Used template fallback for {phone} (session window expired)")

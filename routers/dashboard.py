@@ -852,16 +852,16 @@ Available message templates:
 Task:
 1. Choose the template that best fits the coach's intent. Prefer templates with fewer variables.
 2. Return the value for EVERY variable listed for that template.
-   - For "first_name": always use the literal string {{{{first_name}}}} (double braces, will be personalised per-runner).
+   - For "first_name": use the literal string {first_name} (single braces) — it will be substituted with each runner's name at send time.
    - For all other variables: write the actual text to appear in the message — no placeholders, no angle brackets, no curly braces.
      Use the coach's context where possible; invent sensible, motivating defaults for anything not mentioned.
 
 Return ONLY a JSON object — no markdown:
-{{{{
+{{
   "template_id": "chosen template key",
-  "variables": {{ "var1": "value1", "var2": "value2", ... }},
+  "variables": {{"var1": "value1", "var2": "value2"}},
   "reasoning": "one sentence: why this template"
-}}}}"""
+}}"""
 
     raw = await llm.complete([
         {"role": "system", "content": "You select WhatsApp message templates for a running coach and return variable values. Return only valid JSON."},
@@ -878,7 +878,7 @@ Return ONLY a JSON object — no markdown:
     if template_id not in TEMPLATES:
         return JSONResponse({"error": f"LLM chose unknown template '{template_id}'. Try again."}, status_code=500)
 
-    # Ensure first_name placeholder is preserved exactly (where the template uses it)
+    # Always force first_name to the literal placeholder — LLM may have filled it with a real name.
     if "first_name" in TEMPLATES[template_id]["variables"]:
         variables["first_name"] = "{first_name}"
 
@@ -927,20 +927,22 @@ async def api_broadcast_check(req: BroadcastCheckReq):
         else:
             out_window.append(name)
 
-    # Check effective message length after first_name substitution (worst case: short name)
     sample_msg = req.message.replace("{first_name}", "there")
-    truncation_warning = len(sample_msg) > 1024 and len(out_window) > 0
+    has_newlines        = "\n" in sample_msg or "\t" in sample_msg
+    truncation_warning  = len(sample_msg) > 1024 and len(out_window) > 0
+    formatting_warning  = has_newlines and len(out_window) > 0  # newlines stripped for template fallback
 
     return {
-        "total":              len(runners),
-        "in_window":          len(in_window),
-        "out_window":         len(out_window),
-        "no_phone":           len(no_phone),
-        "in_window_names":    in_window,
-        "out_window_names":   out_window,
-        "no_phone_names":     no_phone,
-        "message_length":     len(sample_msg),
-        "truncation_warning": truncation_warning,
+        "total":               len(runners),
+        "in_window":           len(in_window),
+        "out_window":          len(out_window),
+        "no_phone":            len(no_phone),
+        "in_window_names":     in_window,
+        "out_window_names":    out_window,
+        "no_phone_names":      no_phone,
+        "message_length":      len(sample_msg),
+        "truncation_warning":  truncation_warning,
+        "formatting_warning":  formatting_warning,
     }
 
 
@@ -3500,6 +3502,9 @@ async function reviewBroadcast() {
     mkRow('✅', '#f0fdf4', `${d.in_window} runner${d.in_window!==1?'s':''} — free-form text (active session in last 24h, Meta restriction does not apply)`, d.in_window_names);
     if (d.out_window > 0) {
       mkRow('📋', '#eff6ff', `${d.out_window} runner${d.out_window!==1?'s':''} — via mm_question_general fallback template (session expired, pre-approved by Meta)`, d.out_window_names);
+    }
+    if (d.formatting_warning) {
+      mkRow('⚠️', '#fef3c7', `Message has line breaks — the ${d.out_window} runner${d.out_window!==1?'s':''} on fallback template will receive a single-line version (WhatsApp template parameters don't allow newlines). All content is preserved, just flattened.`, null);
     }
     if (d.truncation_warning) {
       mkRow('⚠️', '#fef3c7', `Message is ${d.message_length} chars — runners on fallback template will be truncated at 1,024 chars. Consider shortening the message.`, null);
