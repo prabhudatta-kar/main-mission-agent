@@ -822,6 +822,92 @@ async def api_dismiss_plan_request(request_id: str):
     return {"ok": True}
 
 
+# ── Broadcast ─────────────────────────────────────────────────────────────────
+
+class BroadcastPreviewReq(BaseModel):
+    context:  str
+    coach_id: str
+
+@router.post("/api/broadcast/preview")
+async def api_broadcast_preview(req: BroadcastPreviewReq):
+    """LLM picks best template and fills it from coach context. Returns preview."""
+    from templates.catalog import TEMPLATES
+
+    runners      = sheets.get_coach_runners(req.coach_id)
+    runner_count = len(runners)
+
+    template_catalog = "\n".join(
+        f'- "{tid}": {t["scenario"]}\n  body: {t["body"]}\n  variables: {", ".join(t["variables"])}'
+        for tid, t in TEMPLATES.items()
+    )
+
+    prompt = f"""You are helping a running coach write a WhatsApp broadcast to all their runners.
+
+Coach's context / intent:
+{req.context}
+
+Available message templates (pick the one that best fits the intent):
+{template_catalog}
+
+Task:
+1. Choose the template that best matches the coach's intent.
+2. Fill in ALL variables. For "first_name" (and any runner-name variable) keep the literal placeholder {{first_name}} — it will be replaced per-runner before sending.
+3. For runner-specific numeric variables (e.g. weeks_to_race, race_goal, distance) use sensible representative values or leave a short descriptive placeholder like "[race goal]" if the coach didn't supply them.
+4. Return ONLY a JSON object — no markdown, no explanation outside the JSON:
+{{
+  "template_id": "the template key you chose",
+  "message": "the fully filled message body, with {{first_name}} kept as-is",
+  "reasoning": "one sentence: why this template"
+}}"""
+
+    raw = await llm.complete([
+        {"role": "system", "content": "You select and fill WhatsApp message templates for a running coach. Return only valid JSON."},
+        {"role": "user",   "content": prompt},
+    ], model="gpt-4o", max_tokens=600)
+
+    result = _extract_json(raw)
+    if not result or "message" not in result:
+        return JSONResponse({"error": "Failed to generate preview. Try again."}, status_code=500)
+
+    return {
+        "message":      result.get("message", ""),
+        "template_id":  result.get("template_id", ""),
+        "reasoning":    result.get("reasoning", ""),
+        "runner_count": runner_count,
+    }
+
+
+class BroadcastSendReq(BaseModel):
+    message:  str   # may contain {first_name} placeholder
+    coach_id: str
+
+@router.post("/api/broadcast/send")
+async def api_broadcast_send(req: BroadcastSendReq):
+    """Send the (optionally personalised) broadcast to all active runners."""
+    runners = sheets.get_coach_runners(req.coach_id)
+    if not runners:
+        return JSONResponse({"error": "No active runners found"}, status_code=400)
+
+    sent = failed = 0
+    for runner in runners:
+        try:
+            first = (runner.get("name") or "there").split()[0]
+            if first == "New":
+                first = "there"
+            msg = req.message.replace("{first_name}", first)
+            await send_runner_message(runner, msg)
+            sheets.log_conversation(
+                runner["runner_id"], req.coach_id,
+                inbound="", outbound=msg, intent="broadcast"
+            )
+            sent += 1
+        except Exception as e:
+            logger.error(f"Broadcast failed for runner {runner.get('runner_id')}: {e}")
+            failed += 1
+
+    return {"ok": True, "sent": sent, "failed": failed}
+
+
 # ── HTML page ─────────────────────────────────────────────────────────────────
 
 @router.get("/", response_class=HTMLResponse)
@@ -1144,6 +1230,22 @@ td small{display:block;font-size:11px;color:#999;margin-top:2px}
 .edit-form-actions{display:flex;gap:6px;margin-top:6px}
 .ef-save{background:#00a884;color:#fff;border:none;border-radius:6px;padding:5px 14px;font-size:12px;font-weight:600;cursor:pointer}
 .ef-cancel{background:#f3f4f6;color:#555;border:none;border-radius:6px;padding:5px 12px;font-size:12px;cursor:pointer}
+
+/* Broadcast modal */
+.bc-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:500;display:flex;align-items:center;justify-content:center;padding:20px}
+.bc-modal{background:#fff;border-radius:14px;width:92vw;max-width:560px;display:flex;flex-direction:column;box-shadow:0 24px 80px rgba(0,0,0,.25)}
+.bc-hdr{padding:18px 24px;border-bottom:1px solid #eee;display:flex;align-items:center;gap:12px;flex-shrink:0}
+.bc-hdr h2{font-size:18px;flex:1}
+.bc-body{padding:24px;display:flex;flex-direction:column;gap:16px}
+.bc-ftr{padding:14px 24px;border-top:1px solid #eee;display:flex;gap:8px;justify-content:flex-end;flex-shrink:0}
+.bc-textarea{width:100%;border:1px solid #ddd;border-radius:8px;padding:10px 14px;font-size:13px;font-family:inherit;resize:vertical;min-height:90px;outline:none;line-height:1.5}
+.bc-textarea:focus{border-color:#e11d48}
+.bc-preview-box{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:14px;font-size:13px;line-height:1.6;white-space:pre-wrap;word-break:break-word}
+.bc-reasoning{font-size:12px;color:#666;font-style:italic}
+.bc-runner-count{font-size:13px;font-weight:600;color:#1a1a2e}
+.btn-broadcast{background:#e11d48;color:#fff;border:none;border-radius:8px;padding:9px 20px;font-size:13px;font-weight:600;cursor:pointer}
+.btn-broadcast:hover{background:#be123c}
+.btn-broadcast:disabled{background:#ccc;cursor:default}
 </style>
 </head>
 <body>
@@ -1154,6 +1256,7 @@ td small{display:block;font-size:11px;color:#999;margin-top:2px}
   <div class="hdr-meta">
     <span id="hdr-date">—</span>
     <button class="manage-ai-btn" onclick="openGroups()" style="background:#0891b2">👥 Groups</button>
+    <button class="manage-ai-btn" onclick="openBroadcast()" style="background:#e11d48">📢 Broadcast</button>
     <button class="manage-ai-btn" onclick="openManageAI()">⚙ Manage AI</button>
     <button class="refresh-btn" onclick="loadData()">↻ Refresh</button>
     <a href="/sysobservations" style="color:#8696a0;text-decoration:none;font-size:12px">🔍 System</a>
@@ -1499,6 +1602,47 @@ td small{display:block;font-size:11px;color:#999;margin-top:2px}
     <div class="gen-modal-ftr" id="gen-modal-ftr">
       <button class="btn-secondary" onclick="closeGenModal()">Cancel</button>
       <button class="btn-purple" id="gen-btn" onclick="generatePlan()">✨ Generate with AI</button>
+    </div>
+  </div>
+</div>
+
+<!-- Broadcast Modal -->
+<div class="bc-overlay" id="bc-overlay" style="display:none" onclick="if(event.target===this)closeBroadcast()">
+  <div class="bc-modal">
+    <div class="bc-hdr">
+      <span style="font-size:22px">📢</span>
+      <h2>Broadcast to all runners</h2>
+      <button class="close-btn" onclick="closeBroadcast()">✕</button>
+    </div>
+
+    <!-- Step 1: context input -->
+    <div class="bc-body" id="bc-step1">
+      <div>
+        <label style="font-size:12px;font-weight:600;color:#555;display:block;margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em">What's the message about?</label>
+        <textarea class="bc-textarea" id="bc-context"
+          placeholder="e.g. Race week motivation — everyone's race is this Sunday&#10;e.g. No session Saturday, gym is closed&#10;e.g. Great week everyone, remind them to rest well before Sunday"></textarea>
+      </div>
+      <div id="bc-step1-status" style="font-size:13px;color:#666"></div>
+    </div>
+
+    <!-- Step 2: preview + confirm -->
+    <div class="bc-body" id="bc-step2" style="display:none">
+      <div class="bc-runner-count" id="bc-runner-count"></div>
+      <div>
+        <label style="font-size:12px;font-weight:600;color:#555;display:block;margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em">Message preview — edit if needed</label>
+        <textarea class="bc-textarea" id="bc-message-edit" rows="6"></textarea>
+      </div>
+      <div class="bc-reasoning" id="bc-reasoning"></div>
+      <div id="bc-step2-status" style="font-size:13px;color:#666"></div>
+    </div>
+
+    <div class="bc-ftr" id="bc-ftr1">
+      <button class="btn-secondary" onclick="closeBroadcast()">Cancel</button>
+      <button class="btn-broadcast" id="bc-preview-btn" onclick="previewBroadcast()">Preview message</button>
+    </div>
+    <div class="bc-ftr" id="bc-ftr2" style="display:none">
+      <button class="btn-secondary" onclick="bcBack()">Back</button>
+      <button class="btn-broadcast" id="bc-send-btn" onclick="sendBroadcast()">Send to all runners</button>
     </div>
   </div>
 </div>
@@ -3172,6 +3316,104 @@ async function savePlanPreview() {
     });
   });
 })();
+
+
+// ── Broadcast ────────────────────────────────────────────────────────────────
+
+function openBroadcast() {
+  document.getElementById('bc-context').value = '';
+  document.getElementById('bc-message-edit').value = '';
+  document.getElementById('bc-runner-count').textContent = '';
+  document.getElementById('bc-reasoning').textContent = '';
+  document.getElementById('bc-step1-status').textContent = '';
+  document.getElementById('bc-step2-status').textContent = '';
+  document.getElementById('bc-step1').style.display = 'flex';
+  document.getElementById('bc-step2').style.display = 'none';
+  document.getElementById('bc-ftr1').style.display = 'flex';
+  document.getElementById('bc-ftr2').style.display = 'none';
+  document.getElementById('bc-overlay').style.display = 'flex';
+}
+
+function closeBroadcast() {
+  document.getElementById('bc-overlay').style.display = 'none';
+}
+
+function bcBack() {
+  document.getElementById('bc-step1').style.display = 'flex';
+  document.getElementById('bc-step2').style.display = 'none';
+  document.getElementById('bc-ftr1').style.display = 'flex';
+  document.getElementById('bc-ftr2').style.display = 'none';
+  document.getElementById('bc-step1-status').textContent = '';
+}
+
+async function previewBroadcast() {
+  const context = document.getElementById('bc-context').value.trim();
+  if (!context) { showToast('Enter some context first', true); return; }
+  const coachId = coaches.length ? coaches[0].id : '';
+  if (!coachId) { showToast('No coach loaded', true); return; }
+
+  const btn = document.getElementById('bc-preview-btn');
+  btn.disabled = true;
+  btn.textContent = 'Generating…';
+  document.getElementById('bc-step1-status').textContent = 'Asking AI to pick the best template…';
+
+  try {
+    const res  = await fetch('/dashboard/api/broadcast/preview', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({context, coach_id: coachId}),
+    });
+    const data = await res.json();
+    if (!res.ok) { showToast(data.error || 'Preview failed', true); return; }
+
+    document.getElementById('bc-message-edit').value = data.message;
+    document.getElementById('bc-runner-count').textContent =
+      `Will be sent to ${data.runner_count} runner${data.runner_count !== 1 ? 's' : ''}`;
+    document.getElementById('bc-reasoning').textContent =
+      data.reasoning ? `Template chosen: ${data.template_id} — ${data.reasoning}` : '';
+    document.getElementById('bc-send-btn').textContent =
+      `Send to ${data.runner_count} runner${data.runner_count !== 1 ? 's' : ''}`;
+
+    document.getElementById('bc-step1').style.display = 'none';
+    document.getElementById('bc-step2').style.display = 'flex';
+    document.getElementById('bc-ftr1').style.display = 'none';
+    document.getElementById('bc-ftr2').style.display = 'flex';
+  } catch(e) {
+    showToast('Error: ' + e.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Preview message';
+    document.getElementById('bc-step1-status').textContent = '';
+  }
+}
+
+async function sendBroadcast() {
+  const message = document.getElementById('bc-message-edit').value.trim();
+  if (!message) { showToast('Message is empty', true); return; }
+  const coachId = coaches.length ? coaches[0].id : '';
+
+  const btn = document.getElementById('bc-send-btn');
+  btn.disabled = true;
+  btn.textContent = 'Sending…';
+  document.getElementById('bc-step2-status').textContent = 'Sending to all runners…';
+
+  try {
+    const res  = await fetch('/dashboard/api/broadcast/send', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({message, coach_id: coachId}),
+    });
+    const data = await res.json();
+    if (!res.ok) { showToast(data.error || 'Send failed', true); return; }
+    showToast(`Broadcast sent to ${data.sent} runner${data.sent !== 1 ? 's' : ''}${data.failed ? ` (${data.failed} failed)` : ''}`);
+    closeBroadcast();
+  } catch(e) {
+    showToast('Error: ' + e.message, true);
+  } finally {
+    btn.disabled = false;
+    document.getElementById('bc-step2-status').textContent = '';
+  }
+}
 
 
 // ── Init ──────────────────────────────────────────────────────────────────────
