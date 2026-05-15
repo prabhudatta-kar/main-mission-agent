@@ -203,6 +203,23 @@ TEMPLATES: dict[str, dict] = {
         "wati_name": "mm_plan_reschedule_flagged",
         "wati_body": "Got it, {{1}} — I've passed your reschedule request to your coach:\n\n\"{{2}}\"\n\nThey'll confirm the change shortly.",
     },
+
+    # ── Broadcast passthrough ───────────────────────────────────────────────────
+
+    "broadcast_custom": {
+        "scenario": (
+            "Coach has already written the complete broadcast message — use when the input is a "
+            "fully formatted announcement with specific details such as times, dates, locations, "
+            "bullet points, or emojis, rather than a brief description of intent. "
+            "Preserve all formatting. Modify any generic greeting (e.g. 'Hi,') to use {first_name} "
+            "for per-runner personalisation (e.g. 'Hi {first_name},'). "
+            "Do NOT use this for short intent descriptions — only for already-written messages."
+        ),
+        "body": "{message}",
+        "variables": ["message"],
+        "wati_name": "mm_broadcast_custom",
+        "wati_body": "{{1}}",
+    },
 }
 
 

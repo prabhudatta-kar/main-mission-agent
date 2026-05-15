@@ -878,19 +878,69 @@ Return ONLY a JSON object — no markdown:
     if template_id not in TEMPLATES:
         return JSONResponse({"error": f"LLM chose unknown template '{template_id}'. Try again."}, status_code=500)
 
-    # Ensure first_name placeholder is preserved exactly
-    variables["first_name"] = "{first_name}"
+    # Ensure first_name placeholder is preserved exactly (where the template uses it)
+    if "first_name" in TEMPLATES[template_id]["variables"]:
+        variables["first_name"] = "{first_name}"
 
-    try:
-        message = fill_template(template_id, variables)
-    except ValueError as e:
-        return JSONResponse({"error": f"Template fill failed: {e}. Try again."}, status_code=500)
+    if template_id == "broadcast_custom":
+        # Passthrough — coach wrote the full message; skip fill_template to avoid
+        # str.format() mangling formatted text that may contain literal braces or emojis.
+        message = variables.get("message", "").strip()
+        if not message:
+            return JSONResponse({"error": "LLM returned empty message. Try again."}, status_code=500)
+    else:
+        try:
+            message = fill_template(template_id, variables)
+        except ValueError as e:
+            return JSONResponse({"error": f"Template fill failed: {e}. Try again."}, status_code=500)
 
     return {
         "message":      message,
         "template_id":  template_id,
         "reasoning":    result.get("reasoning", ""),
         "runner_count": runner_count,
+    }
+
+
+class BroadcastCheckReq(BaseModel):
+    message:  str
+    coach_id: str
+
+@router.post("/api/broadcast/check")
+async def api_broadcast_check(req: BroadcastCheckReq):
+    """Pre-send check: session window status per runner, truncation warnings."""
+    runners = sheets.get_coach_runners(req.coach_id)
+    if not runners:
+        return JSONResponse({"error": "No active runners found"}, status_code=400)
+
+    in_window:  list[str] = []
+    out_window: list[str] = []
+    no_phone:   list[str] = []
+
+    for runner in runners:
+        name = runner.get("name", runner["runner_id"])
+        if not runner.get("phone"):
+            no_phone.append(name)
+            continue
+        if sheets.is_within_session_window(runner["runner_id"]):
+            in_window.append(name)
+        else:
+            out_window.append(name)
+
+    # Check effective message length after first_name substitution (worst case: short name)
+    sample_msg = req.message.replace("{first_name}", "there")
+    truncation_warning = len(sample_msg) > 1024 and len(out_window) > 0
+
+    return {
+        "total":              len(runners),
+        "in_window":          len(in_window),
+        "out_window":         len(out_window),
+        "no_phone":           len(no_phone),
+        "in_window_names":    in_window,
+        "out_window_names":   out_window,
+        "no_phone_names":     no_phone,
+        "message_length":     len(sample_msg),
+        "truncation_warning": truncation_warning,
     }
 
 
@@ -1659,7 +1709,19 @@ td small{display:block;font-size:11px;color:#999;margin-top:2px}
     </div>
     <div class="bc-ftr" id="bc-ftr2" style="display:none">
       <button class="btn-secondary" onclick="bcBack()">Back</button>
-      <button class="btn-broadcast" id="bc-send-btn" onclick="sendBroadcast()">Send to all runners</button>
+      <button class="btn-broadcast" id="bc-review-btn" onclick="reviewBroadcast()">Review delivery</button>
+    </div>
+
+    <!-- Step 3: delivery check -->
+    <div class="bc-body" id="bc-step3" style="display:none">
+      <div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:4px">Delivery check</div>
+      <div id="bc-check-rows" style="display:flex;flex-direction:column;gap:10px;font-size:13px"></div>
+      <div id="bc-step3-status" style="font-size:13px;color:#666"></div>
+    </div>
+
+    <div class="bc-ftr" id="bc-ftr3" style="display:none">
+      <button class="btn-secondary" onclick="bcBack2()">Back</button>
+      <button class="btn-broadcast" id="bc-send-btn" onclick="sendBroadcast()">Confirm &amp; Send</button>
     </div>
   </div>
 </div>
@@ -3337,6 +3399,13 @@ async function savePlanPreview() {
 
 // ── Broadcast ────────────────────────────────────────────────────────────────
 
+function _bcShow(step) {
+  ['bc-step1','bc-step2','bc-step3'].forEach(id => document.getElementById(id).style.display='none');
+  ['bc-ftr1','bc-ftr2','bc-ftr3'].forEach(id => document.getElementById(id).style.display='none');
+  document.getElementById('bc-step'+step).style.display='flex';
+  document.getElementById('bc-ftr'+step).style.display='flex';
+}
+
 function openBroadcast() {
   document.getElementById('bc-context').value = '';
   document.getElementById('bc-message-edit').value = '';
@@ -3344,10 +3413,9 @@ function openBroadcast() {
   document.getElementById('bc-reasoning').textContent = '';
   document.getElementById('bc-step1-status').textContent = '';
   document.getElementById('bc-step2-status').textContent = '';
-  document.getElementById('bc-step1').style.display = 'flex';
-  document.getElementById('bc-step2').style.display = 'none';
-  document.getElementById('bc-ftr1').style.display = 'flex';
-  document.getElementById('bc-ftr2').style.display = 'none';
+  document.getElementById('bc-check-rows').innerHTML = '';
+  document.getElementById('bc-step3-status').textContent = '';
+  _bcShow(1);
   document.getElementById('bc-overlay').style.display = 'flex';
 }
 
@@ -3355,13 +3423,8 @@ function closeBroadcast() {
   document.getElementById('bc-overlay').style.display = 'none';
 }
 
-function bcBack() {
-  document.getElementById('bc-step1').style.display = 'flex';
-  document.getElementById('bc-step2').style.display = 'none';
-  document.getElementById('bc-ftr1').style.display = 'flex';
-  document.getElementById('bc-ftr2').style.display = 'none';
-  document.getElementById('bc-step1-status').textContent = '';
-}
+function bcBack()  { _bcShow(1); }
+function bcBack2() { _bcShow(2); }
 
 async function previewBroadcast() {
   const context = document.getElementById('bc-context').value.trim();
@@ -3404,15 +3467,65 @@ async function previewBroadcast() {
   }
 }
 
+async function reviewBroadcast() {
+  const message = document.getElementById('bc-message-edit').value.trim();
+  if (!message) { showToast('Message is empty', true); return; }
+  const coachId = coaches.length ? coaches[0].id : '';
+
+  const btn = document.getElementById('bc-review-btn');
+  btn.disabled = true; btn.textContent = 'Checking…';
+
+  try {
+    const res  = await fetch('/dashboard/api/broadcast/check', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({message, coach_id: coachId}),
+    });
+    const d = await res.json();
+    if (!res.ok) { showToast(d.error || 'Check failed', true); return; }
+
+    const rows = document.getElementById('bc-check-rows');
+    rows.innerHTML = '';
+
+    const mkRow = (icon, color, text, names) => {
+      const el = document.createElement('div');
+      el.style.cssText = `background:${color};border-radius:8px;padding:10px 14px`;
+      let html = `<div style="font-weight:600">${icon} ${text}</div>`;
+      if (names && names.length) {
+        html += `<div style="font-size:12px;color:#555;margin-top:4px">${names.join(', ')}</div>`;
+      }
+      el.innerHTML = html; rows.appendChild(el);
+    };
+
+    mkRow('✅', '#f0fdf4', `${d.in_window} runner${d.in_window!==1?'s':''} — free-form text (active session in last 24h, Meta restriction does not apply)`, d.in_window_names);
+    if (d.out_window > 0) {
+      mkRow('📋', '#eff6ff', `${d.out_window} runner${d.out_window!==1?'s':''} — via mm_question_general fallback template (session expired, pre-approved by Meta)`, d.out_window_names);
+    }
+    if (d.truncation_warning) {
+      mkRow('⚠️', '#fef3c7', `Message is ${d.message_length} chars — runners on fallback template will be truncated at 1,024 chars. Consider shortening the message.`, null);
+    }
+    if (d.no_phone > 0) {
+      mkRow('⛔', '#fff1f2', `${d.no_phone} runner${d.no_phone!==1?'s':''} skipped — no phone number on file`, d.no_phone_names);
+    }
+
+    const sendable = d.in_window + d.out_window;
+    document.getElementById('bc-send-btn').textContent = `Confirm & Send to ${sendable} runner${sendable!==1?'s':''}`;
+    _bcShow(3);
+  } catch(e) {
+    showToast('Error: ' + e.message, true);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Review delivery';
+  }
+}
+
 async function sendBroadcast() {
   const message = document.getElementById('bc-message-edit').value.trim();
   if (!message) { showToast('Message is empty', true); return; }
   const coachId = coaches.length ? coaches[0].id : '';
 
   const btn = document.getElementById('bc-send-btn');
-  btn.disabled = true;
-  btn.textContent = 'Sending…';
-  document.getElementById('bc-step2-status').textContent = 'Sending to all runners…';
+  btn.disabled = true; btn.textContent = 'Sending…';
+  document.getElementById('bc-step3-status').textContent = 'Sending to all runners…';
 
   try {
     const res  = await fetch('/dashboard/api/broadcast/send', {
@@ -3428,7 +3541,7 @@ async function sendBroadcast() {
     showToast('Error: ' + e.message, true);
   } finally {
     btn.disabled = false;
-    document.getElementById('bc-step2-status').textContent = '';
+    document.getElementById('bc-step3-status').textContent = '';
   }
 }
 
