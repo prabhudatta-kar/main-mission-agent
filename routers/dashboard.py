@@ -913,52 +913,58 @@ async def api_broadcast_check(req: BroadcastCheckReq):
     if not runners:
         return JSONResponse({"error": "No active runners found"}, status_code=400)
 
-    in_window:  list[str] = []
-    out_window: list[str] = []
-    no_phone:   list[str] = []
+    in_window:  list[dict] = []
+    out_window: list[dict] = []
+    no_phone:   list[str]  = []
 
     for runner in runners:
         name = runner.get("name", runner["runner_id"])
         if not runner.get("phone"):
             no_phone.append(name)
             continue
+        entry = {"runner_id": runner["runner_id"], "name": name}
         if sheets.is_within_session_window(runner["runner_id"]):
-            in_window.append(name)
+            in_window.append(entry)
         else:
-            out_window.append(name)
+            out_window.append(entry)
 
     sample_msg = req.message.replace("{first_name}", "there")
-    has_newlines        = "\n" in sample_msg or "\t" in sample_msg
-    truncation_warning  = len(sample_msg) > 1024 and len(out_window) > 0
-    formatting_warning  = has_newlines and len(out_window) > 0  # newlines stripped for template fallback
+    has_newlines       = "\n" in sample_msg or "\t" in sample_msg
+    truncation_warning = len(sample_msg) > 1024 and len(out_window) > 0
+    formatting_warning = has_newlines and len(out_window) > 0
 
     return {
-        "total":               len(runners),
-        "in_window":           len(in_window),
-        "out_window":          len(out_window),
-        "no_phone":            len(no_phone),
-        "in_window_names":     in_window,
-        "out_window_names":    out_window,
-        "no_phone_names":      no_phone,
-        "message_length":      len(sample_msg),
-        "truncation_warning":  truncation_warning,
-        "formatting_warning":  formatting_warning,
+        "total":              len(runners),
+        "in_window":          len(in_window),
+        "out_window":         len(out_window),
+        "no_phone":           len(no_phone),
+        "in_window_runners":  in_window,
+        "out_window_runners": out_window,
+        "no_phone_names":     no_phone,
+        "message_length":     len(sample_msg),
+        "truncation_warning": truncation_warning,
+        "formatting_warning": formatting_warning,
     }
 
 
 class BroadcastSendReq(BaseModel):
-    message:  str   # may contain {first_name} placeholder
-    coach_id: str
+    message:    str
+    coach_id:   str
+    runner_ids: List[str] = []  # if non-empty, only send to these runners
 
 @router.post("/api/broadcast/send")
 async def api_broadcast_send(req: BroadcastSendReq):
-    """Send the (optionally personalised) broadcast to all active runners."""
+    """Send broadcast. If runner_ids is provided, only those runners receive it."""
     runners = sheets.get_coach_runners(req.coach_id)
     if not runners:
         return JSONResponse({"error": "No active runners found"}, status_code=400)
 
+    allowed = set(req.runner_ids) if req.runner_ids else None
+
     sent = failed = 0
     for runner in runners:
+        if allowed is not None and runner["runner_id"] not in allowed:
+            continue
         try:
             first = (runner.get("name") or "there").split()[0]
             if first == "New":
@@ -1714,10 +1720,19 @@ td small{display:block;font-size:11px;color:#999;margin-top:2px}
       <button class="btn-broadcast" id="bc-review-btn" onclick="reviewBroadcast()">Review delivery</button>
     </div>
 
-    <!-- Step 3: delivery check -->
+    <!-- Step 3: delivery check + runner checklist -->
     <div class="bc-body" id="bc-step3" style="display:none">
-      <div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:4px">Delivery check</div>
-      <div id="bc-check-rows" style="display:flex;flex-direction:column;gap:10px;font-size:13px"></div>
+      <div id="bc-check-warnings" style="display:flex;flex-direction:column;gap:8px;font-size:13px"></div>
+      <div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <input id="bc-search" type="text" placeholder="Search runner…"
+            oninput="bcFilterList()"
+            style="flex:1;border:1px solid #ddd;border-radius:8px;padding:6px 12px;font-size:13px;outline:none">
+          <button onclick="bcSelectAll(true)"  style="font-size:12px;padding:4px 10px;border:1px solid #ddd;border-radius:6px;cursor:pointer;background:#fff">All</button>
+          <button onclick="bcSelectAll(false)" style="font-size:12px;padding:4px 10px;border:1px solid #ddd;border-radius:6px;cursor:pointer;background:#fff">None</button>
+        </div>
+        <div id="bc-runner-list" style="max-height:260px;overflow-y:auto;border:1px solid #eee;border-radius:8px;font-size:13px"></div>
+      </div>
       <div id="bc-step3-status" style="font-size:13px;color:#666"></div>
     </div>
 
@@ -3469,6 +3484,47 @@ async function previewBroadcast() {
   }
 }
 
+let _bcAllRunners = [];  // [{runner_id, name, method}]
+
+function bcFilterList() {
+  const q = document.getElementById('bc-search').value.toLowerCase();
+  document.querySelectorAll('.bc-runner-row').forEach(row => {
+    row.style.display = row.dataset.name.toLowerCase().includes(q) ? '' : 'none';
+  });
+}
+
+function bcSelectAll(checked) {
+  document.querySelectorAll('.bc-runner-chk').forEach(chk => { chk.checked = checked; });
+  bcUpdateSendBtn();
+}
+
+function bcUpdateSendBtn() {
+  const n = document.querySelectorAll('.bc-runner-chk:checked').length;
+  document.getElementById('bc-send-btn').textContent = `Confirm & Send to ${n} runner${n!==1?'s':''}`;
+  document.getElementById('bc-send-btn').disabled = n === 0;
+}
+
+function bcRenderList(inWindow, outWindow) {
+  _bcAllRunners = [
+    ...inWindow.map(r  => ({...r, method: 'text'})),
+    ...outWindow.map(r => ({...r, method: 'template'})),
+  ];
+  const list = document.getElementById('bc-runner-list');
+  list.innerHTML = '';
+  _bcAllRunners.forEach(r => {
+    const row = document.createElement('label');
+    row.className = 'bc-runner-row';
+    row.dataset.name = r.name;
+    row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid #f5f5f5;cursor:pointer';
+    row.innerHTML = `
+      <input type="checkbox" class="bc-runner-chk" value="${r.runner_id}" checked onchange="bcUpdateSendBtn()" style="width:15px;height:15px;cursor:pointer;flex-shrink:0">
+      <span style="flex:1">${r.name}</span>
+      <span style="font-size:11px;color:${r.method==='text'?'#16a34a':'#1e40af'};font-weight:600">${r.method==='text'?'direct':'template'}</span>`;
+    list.appendChild(row);
+  });
+  bcUpdateSendBtn();
+}
+
 async function reviewBroadcast() {
   const message = document.getElementById('bc-message-edit').value.trim();
   if (!message) { showToast('Message is empty', true); return; }
@@ -3478,7 +3534,7 @@ async function reviewBroadcast() {
   btn.disabled = true; btn.textContent = 'Checking…';
 
   try {
-    const res  = await fetch('/dashboard/api/broadcast/check', {
+    const res = await fetch('/dashboard/api/broadcast/check', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
       body: JSON.stringify({message, coach_id: coachId}),
@@ -3486,35 +3542,27 @@ async function reviewBroadcast() {
     const d = await res.json();
     if (!res.ok) { showToast(d.error || 'Check failed', true); return; }
 
-    const rows = document.getElementById('bc-check-rows');
-    rows.innerHTML = '';
-
-    const mkRow = (icon, color, text, names) => {
+    // Warnings strip
+    const warn = document.getElementById('bc-check-warnings');
+    warn.innerHTML = '';
+    const mkWarn = (icon, color, text) => {
       const el = document.createElement('div');
-      el.style.cssText = `background:${color};border-radius:8px;padding:10px 14px`;
-      let html = `<div style="font-weight:600">${icon} ${text}</div>`;
-      if (names && names.length) {
-        html += `<div style="font-size:12px;color:#555;margin-top:4px">${names.join(', ')}</div>`;
-      }
-      el.innerHTML = html; rows.appendChild(el);
+      el.style.cssText = `background:${color};border-radius:8px;padding:10px 14px;font-size:13px`;
+      el.innerHTML = `<strong>${icon}</strong> ${text}`;
+      warn.appendChild(el);
     };
-
-    mkRow('✅', '#f0fdf4', `${d.in_window} runner${d.in_window!==1?'s':''} — free-form text (active session in last 24h, Meta restriction does not apply)`, d.in_window_names);
-    if (d.out_window > 0) {
-      mkRow('📋', '#eff6ff', `${d.out_window} runner${d.out_window!==1?'s':''} — via mm_question_general fallback template (session expired, pre-approved by Meta)`, d.out_window_names);
-    }
     if (d.formatting_warning) {
-      mkRow('⚠️', '#fef3c7', `Message has line breaks — the ${d.out_window} runner${d.out_window!==1?'s':''} on fallback template will receive a single-line version (WhatsApp template parameters don't allow newlines). All content is preserved, just flattened.`, null);
+      mkWarn('⚠️', '#fef3c7', `${d.out_window} runner${d.out_window!==1?'s':''} on fallback template will receive a single-line version (WhatsApp template params don't allow newlines).`);
     }
     if (d.truncation_warning) {
-      mkRow('⚠️', '#fef3c7', `Message is ${d.message_length} chars — runners on fallback template will be truncated at 1,024 chars. Consider shortening the message.`, null);
+      mkWarn('⚠️', '#fef3c7', `Message is ${d.message_length} chars — fallback runners truncated at 1,024 chars.`);
     }
     if (d.no_phone > 0) {
-      mkRow('⛔', '#fff1f2', `${d.no_phone} runner${d.no_phone!==1?'s':''} skipped — no phone number on file`, d.no_phone_names);
+      mkWarn('⛔', '#fff1f2', `${d.no_phone} runner${d.no_phone!==1?'s':''} have no phone and will be skipped: ${d.no_phone_names.join(', ')}`);
     }
 
-    const sendable = d.in_window + d.out_window;
-    document.getElementById('bc-send-btn').textContent = `Confirm & Send to ${sendable} runner${sendable!==1?'s':''}`;
+    bcRenderList(d.in_window_runners, d.out_window_runners);
+    document.getElementById('bc-search').value = '';
     _bcShow(3);
   } catch(e) {
     showToast('Error: ' + e.message, true);
@@ -3528,19 +3576,22 @@ async function sendBroadcast() {
   if (!message) { showToast('Message is empty', true); return; }
   const coachId = coaches.length ? coaches[0].id : '';
 
+  const checkedIds = [...document.querySelectorAll('.bc-runner-chk:checked')].map(c => c.value);
+  if (!checkedIds.length) { showToast('No runners selected', true); return; }
+
   const btn = document.getElementById('bc-send-btn');
   btn.disabled = true; btn.textContent = 'Sending…';
-  document.getElementById('bc-step3-status').textContent = 'Sending to all runners…';
+  document.getElementById('bc-step3-status').textContent = `Sending to ${checkedIds.length} runners…`;
 
   try {
-    const res  = await fetch('/dashboard/api/broadcast/send', {
+    const res = await fetch('/dashboard/api/broadcast/send', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({message, coach_id: coachId}),
+      body: JSON.stringify({message, coach_id: coachId, runner_ids: checkedIds}),
     });
     const data = await res.json();
     if (!res.ok) { showToast(data.error || 'Send failed', true); return; }
-    showToast(`Broadcast sent to ${data.sent} runner${data.sent !== 1 ? 's' : ''}${data.failed ? ` (${data.failed} failed)` : ''}`);
+    showToast(`Broadcast sent to ${data.sent} runner${data.sent!==1?'s':''}${data.failed?` (${data.failed} failed)`:''}`);
     closeBroadcast();
   } catch(e) {
     showToast('Error: ' + e.message, true);
