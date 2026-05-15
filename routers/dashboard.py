@@ -852,7 +852,7 @@ Available message templates:
 Task:
 1. Choose the template that best fits the coach's intent. Prefer templates with fewer variables.
 2. Return the value for EVERY variable listed for that template.
-   - For "first_name": use the literal string {first_name} (single braces) — it will be substituted with each runner's name at send time.
+   - For "first_name": use the literal string {{first_name}} — it will be substituted with each runner's name at send time.
    - For all other variables: write the actual text to appear in the message — no placeholders, no angle brackets, no curly braces.
      Use the coach's context where possible; invent sensible, motivating defaults for anything not mentioned.
 
