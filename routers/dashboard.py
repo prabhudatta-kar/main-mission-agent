@@ -3430,7 +3430,8 @@ function openBroadcast() {
   document.getElementById('bc-reasoning').textContent = '';
   document.getElementById('bc-step1-status').textContent = '';
   document.getElementById('bc-step2-status').textContent = '';
-  document.getElementById('bc-check-rows').innerHTML = '';
+  document.getElementById('bc-check-warnings').innerHTML = '';
+  document.getElementById('bc-runner-list').innerHTML = '';
   document.getElementById('bc-step3-status').textContent = '';
   _bcShow(1);
   document.getElementById('bc-overlay').style.display = 'flex';
