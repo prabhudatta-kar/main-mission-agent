@@ -830,14 +830,14 @@ class BroadcastPreviewReq(BaseModel):
 
 @router.post("/api/broadcast/preview")
 async def api_broadcast_preview(req: BroadcastPreviewReq):
-    """LLM picks best template and fills it from coach context. Returns preview."""
-    from templates.catalog import TEMPLATES
+    """LLM picks best template and returns variable values; server fills via fill_template()."""
+    from templates.catalog import TEMPLATES, fill_template
 
     runners      = sheets.get_coach_runners(req.coach_id)
     runner_count = len(runners)
 
     template_catalog = "\n".join(
-        f'- "{tid}": {t["scenario"]}\n  body: {t["body"]}\n  variables: {", ".join(t["variables"])}'
+        f'- "{tid}": {t["scenario"]} | variables: {", ".join(t["variables"])}'
         for tid, t in TEMPLATES.items()
     )
 
@@ -846,32 +846,49 @@ async def api_broadcast_preview(req: BroadcastPreviewReq):
 Coach's context / intent:
 {req.context}
 
-Available message templates (pick the one that best fits the intent):
+Available message templates:
 {template_catalog}
 
 Task:
-1. Choose the template that best matches the coach's intent.
-2. Fill in ALL variables. For "first_name" (and any runner-name variable) keep the literal placeholder {{first_name}} — it will be replaced per-runner before sending.
-3. For runner-specific numeric variables (e.g. weeks_to_race, race_goal, distance) use sensible representative values or leave a short descriptive placeholder like "[race goal]" if the coach didn't supply them.
-4. Return ONLY a JSON object — no markdown, no explanation outside the JSON:
-{{
-  "template_id": "the template key you chose",
-  "message": "the fully filled message body, with {{first_name}} kept as-is",
+1. Choose the template that best fits the coach's intent. Prefer templates with fewer variables.
+2. Return the value for EVERY variable listed for that template.
+   - For "first_name": always use the literal string {{{{first_name}}}} (double braces, will be personalised per-runner).
+   - For all other variables: write the actual text to appear in the message — no placeholders, no angle brackets, no curly braces.
+     Use the coach's context where possible; invent sensible, motivating defaults for anything not mentioned.
+
+Return ONLY a JSON object — no markdown:
+{{{{
+  "template_id": "chosen template key",
+  "variables": {{ "var1": "value1", "var2": "value2", ... }},
   "reasoning": "one sentence: why this template"
-}}"""
+}}}}"""
 
     raw = await llm.complete([
-        {"role": "system", "content": "You select and fill WhatsApp message templates for a running coach. Return only valid JSON."},
+        {"role": "system", "content": "You select WhatsApp message templates for a running coach and return variable values. Return only valid JSON."},
         {"role": "user",   "content": prompt},
     ], model="gpt-4o", max_tokens=600)
 
     result = _extract_json(raw)
-    if not result or "message" not in result:
+    if not result or "template_id" not in result or "variables" not in result:
         return JSONResponse({"error": "Failed to generate preview. Try again."}, status_code=500)
 
+    template_id = result["template_id"]
+    variables   = result["variables"]
+
+    if template_id not in TEMPLATES:
+        return JSONResponse({"error": f"LLM chose unknown template '{template_id}'. Try again."}, status_code=500)
+
+    # Ensure first_name placeholder is preserved exactly
+    variables["first_name"] = "{first_name}"
+
+    try:
+        message = fill_template(template_id, variables)
+    except ValueError as e:
+        return JSONResponse({"error": f"Template fill failed: {e}. Try again."}, status_code=500)
+
     return {
-        "message":      result.get("message", ""),
-        "template_id":  result.get("template_id", ""),
+        "message":      message,
+        "template_id":  template_id,
         "reasoning":    result.get("reasoning", ""),
         "runner_count": runner_count,
     }
