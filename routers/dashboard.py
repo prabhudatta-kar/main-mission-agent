@@ -3446,9 +3446,9 @@ function bcBack2() { _bcShow(2); }
 
 async function previewBroadcast() {
   const context = document.getElementById('bc-context').value.trim();
-  if (!context) { showToast('Enter some context first', true); return; }
+  if (!context) { toast('Enter some context first', true); return; }
   const coachId = coaches.length ? coaches[0].id : '';
-  if (!coachId) { showToast('No coach loaded', true); return; }
+  if (!coachId) { toast('No coach loaded', true); return; }
 
   const btn = document.getElementById('bc-preview-btn');
   btn.disabled = true;
@@ -3462,7 +3462,7 @@ async function previewBroadcast() {
       body: JSON.stringify({context, coach_id: coachId}),
     });
     const data = await res.json();
-    if (!res.ok) { showToast(data.error || 'Preview failed', true); return; }
+    if (!res.ok) { toast(data.error || 'Preview failed', true); return; }
 
     document.getElementById('bc-message-edit').value = data.message;
     document.getElementById('bc-runner-count').textContent =
@@ -3477,7 +3477,7 @@ async function previewBroadcast() {
     document.getElementById('bc-ftr1').style.display = 'none';
     document.getElementById('bc-ftr2').style.display = 'flex';
   } catch(e) {
-    showToast('Error: ' + e.message, true);
+    toast('Error: ' + e.message, true);
   } finally {
     btn.disabled = false;
     btn.textContent = 'Preview message';
@@ -3528,7 +3528,7 @@ function bcRenderList(inWindow, outWindow) {
 
 async function reviewBroadcast() {
   const message = document.getElementById('bc-message-edit').value.trim();
-  if (!message) { showToast('Message is empty', true); return; }
+  if (!message) { toast('Message is empty', true); return; }
   const coachId = coaches.length ? coaches[0].id : '';
 
   const btn = document.getElementById('bc-review-btn');
@@ -3541,7 +3541,7 @@ async function reviewBroadcast() {
       body: JSON.stringify({message, coach_id: coachId}),
     });
     const d = await res.json();
-    if (!res.ok) { showToast(d.error || 'Check failed', true); return; }
+    if (!res.ok) { toast(d.error || 'Check failed', true); return; }
 
     // Warnings strip
     const warn = document.getElementById('bc-check-warnings');
@@ -3566,7 +3566,7 @@ async function reviewBroadcast() {
     document.getElementById('bc-search').value = '';
     _bcShow(3);
   } catch(e) {
-    showToast('Error: ' + e.message, true);
+    toast('Error: ' + e.message, true);
   } finally {
     btn.disabled = false; btn.textContent = 'Review delivery';
   }
@@ -3574,11 +3574,11 @@ async function reviewBroadcast() {
 
 async function sendBroadcast() {
   const message = document.getElementById('bc-message-edit').value.trim();
-  if (!message) { showToast('Message is empty', true); return; }
+  if (!message) { toast('Message is empty', true); return; }
   const coachId = coaches.length ? coaches[0].id : '';
 
   const checkedIds = [...document.querySelectorAll('.bc-runner-chk:checked')].map(c => c.value);
-  if (!checkedIds.length) { showToast('No runners selected', true); return; }
+  if (!checkedIds.length) { toast('No runners selected', true); return; }
 
   const btn = document.getElementById('bc-send-btn');
   btn.disabled = true; btn.textContent = 'Sending…';
@@ -3591,11 +3591,11 @@ async function sendBroadcast() {
       body: JSON.stringify({message, coach_id: coachId, runner_ids: checkedIds}),
     });
     const data = await res.json();
-    if (!res.ok) { showToast(data.error || 'Send failed', true); return; }
-    showToast(`Broadcast sent to ${data.sent} runner${data.sent!==1?'s':''}${data.failed?` (${data.failed} failed)`:''}`);
+    if (!res.ok) { toast(data.error || 'Send failed', true); return; }
+    toast(`Broadcast sent to ${data.sent} runner${data.sent!==1?'s':''}${data.failed?` (${data.failed} failed)`:''}`);
     closeBroadcast();
   } catch(e) {
-    showToast('Error: ' + e.message, true);
+    toast('Error: ' + e.message, true);
   } finally {
     btn.disabled = false;
     document.getElementById('bc-step3-status').textContent = '';
