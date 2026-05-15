@@ -16,6 +16,11 @@ async def handle_incoming(data: dict):
         logger.debug("Skipping operator-sent message (owner=True)")
         return
 
+    # Ignore outbound delivery/status events — these are not inbound messages
+    if data.get("eventType") in ("templateMessageSent", "messageDelivered", "messageRead", "messageSent"):
+        logger.debug(f"Skipping outbound event: {data.get('eventType')}")
+        return
+
     msg_type = data.get("type", "")
     phone    = data.get("waId") or data.get("phone")
 

@@ -123,21 +123,25 @@ async def send_runner_message(runner: dict, message: str):
 
     # Template fallback — either session window expired, or send_text was rejected by Wati.
     # Template body: "{first_name}, {answer}"
-    # Strip any leading "Name," or "Name!" prefix to prevent doubling.
-        answer = message.strip()
-        if first and first != "there":
-            for sep in (", ", "! ", "! \n", ",\n"):
-                prefix = first + sep
+    # Strip any greeting prefix that contains the runner's name to prevent doubling.
+    import re
+    answer = message.strip()
+    if first and first != "there":
+        for greeting in ("Hi ", "Hey ", "Hello ", ""):
+            for sep in (", ", "! ", "! \n", ",\n", "\n"):
+                prefix = greeting + first + sep
                 if answer.startswith(prefix):
                     answer = answer[len(prefix):].lstrip()
                     break
-        # Wati template parameters reject newlines, tabs, and 5+ consecutive spaces.
-        import re
-        answer_clean = answer.replace("\n", " ").replace("\t", " ")
-        answer_clean = re.sub(r" {5,}", "    ", answer_clean).strip()
-        await whatsapp.send_template(
-            phone=phone,
-            template_name="mm_question_general",
-            variables={"first_name": first, "answer": answer_clean[:1024]},
-        )
-        logger.info(f"Used template fallback for {phone} (session window expired)")
+            else:
+                continue
+            break
+    # Wati template parameters reject newlines, tabs, and 5+ consecutive spaces.
+    answer_clean = answer.replace("\n", " ").replace("\t", " ")
+    answer_clean = re.sub(r" {5,}", "    ", answer_clean).strip()
+    await whatsapp.send_template(
+        phone=phone,
+        template_name="mm_question_general",
+        variables={"first_name": first, "answer": answer_clean[:1024]},
+    )
+    logger.info(f"Used template fallback for {phone}")
