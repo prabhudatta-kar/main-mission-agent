@@ -21,10 +21,11 @@ class WhatsAppClient:
             "Content-Type": "application/json",
         }
 
-    async def send_text(self, phone: str, message: str):
+    async def send_text(self, phone: str, message: str) -> bool:
+        """Returns True if delivered. Returns False if Wati rejects (e.g. ticket expired/closed)."""
         if not message or not message.strip():
             logger.error(f"send_text called with empty message for {phone} — skipping")
-            return
+            return False
         clean_phone = _wati_phone(phone)
         async with httpx.AsyncClient() as client:
             try:
@@ -35,11 +36,22 @@ class WhatsAppClient:
                     timeout=10,
                 )
                 resp.raise_for_status()
-                logger.info(f"Sent text to {clean_phone} — Wati response: {resp.text[:300]}")
+                try:
+                    body = resp.json()
+                except Exception:
+                    body = {}
+                if not body.get("result", True):
+                    # Wati returns HTTP 200 but result:false when ticket is closed/expired
+                    logger.warning(f"send_text rejected for {clean_phone}: {body.get('message', 'unknown')} (ticketStatus={body.get('ticketStatus', '?')})")
+                    return False
+                logger.info(f"Sent text to {clean_phone}")
+                return True
             except httpx.HTTPStatusError as e:
                 logger.error(f"WhatsApp send_text failed for {phone}: HTTP {e.response.status_code} — {e.response.text}")
+                return False
             except httpx.RequestError as e:
                 logger.error(f"WhatsApp send_text request error for {phone}: {e}")
+                return False
 
     async def send_template(self, phone: str, template_name: str, variables: dict):
         clean_phone = _wati_phone(phone)
@@ -104,12 +116,14 @@ async def send_runner_message(runner: dict, message: str):
         first = "there"
 
     if _sheets.is_within_session_window(runner_id):
-        await whatsapp.send_text(phone, message)
-    else:
-        # Session expired — use mm_question_general as generic fallback.
-        # Template body: "{first_name}, {answer}"
-        # Strip any leading "Name," or "Name!" prefix from the message body
-        # to prevent doubling — the template already prepends the name.
+        delivered = await whatsapp.send_text(phone, message)
+        if delivered:
+            return
+        logger.info(f"send_text rejected for {phone} (ticket closed despite active window) — falling back to template")
+
+    # Template fallback — either session window expired, or send_text was rejected by Wati.
+    # Template body: "{first_name}, {answer}"
+    # Strip any leading "Name," or "Name!" prefix to prevent doubling.
         answer = message.strip()
         if first and first != "there":
             for sep in (", ", "! ", "! \n", ",\n"):
